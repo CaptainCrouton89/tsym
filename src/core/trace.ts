@@ -34,10 +34,12 @@ export async function trace(ws: Workspace, addresses: string | readonly string[]
         const node = graphNodeFromCallee(callee);
         addEdge(edges, current.id, node.id, callee.callSites);
         const { declaration: _declaration, callable: _callable, ...row } = callee;
-        const existing = rows.get(node.id);
-        if (existing) existing.callSites += row.callSites;
-        else rows.set(node.id, row);
-        if (seen.has(node.id)) continue;
+        if (seen.has(node.id)) {
+          const existing = rows.get(node.id);
+          if (existing) existing.callSites += row.callSites;
+          continue;
+        }
+        rows.set(node.id, row);
         seen.add(node.id);
         nodes.set(node.id, node);
         next.push({ declaration: callee.callable, id: node.id });
@@ -46,9 +48,14 @@ export async function trace(ws: Workspace, addresses: string | readonly string[]
     frontier = next;
   }
 
-  const items = [...rows.values()].sort(compareCallees);
-  const finished = finish({ command: 'trace', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit, unresolved: unresolved.length, ...opts }, items);
-  return { ...finished, graph: graphForItems({ nodes: [...nodes.values()], edges: [...edges.values()], unresolved }, finished.items, opts) };
+  const filteredGraph = graphForItems({ nodes: [...nodes.values()], edges: [...edges.values()], unresolved }, opts);
+  const nodeIds = new Set(filteredGraph.nodes.map((node) => node.id));
+  const items = [...rows.values()].filter((row) => nodeIds.has(address(row))).sort(compareCallees);
+  const finished = finish({ command: 'trace', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit }, items);
+  const graph = graphForItems(filteredGraph, {}, new Set(finished.items.map(address)));
+  finished.receipt.excluded = rows.size - items.length;
+  finished.receipt.unresolved = graph.unresolved.length;
+  return { ...finished, graph };
 }
 
 export function graphNodeFromSymbol(symbol: Symbol): GraphNode {
@@ -70,15 +77,33 @@ export function addEdge(edges: Map<string, GraphEdge>, from: string, to: string,
   else edges.set(key, { from, to, callSites });
 }
 
-/** Keep a limited traversal graph aligned with emitted rows and path filters. */
-export function graphForItems(graph: Graph, items: Array<{ path: string; start: { line: number; col: number } }>, filters: PathFilters = {}): Graph {
-  const kept = new Set([...items.map(address), ...graph.nodes.filter((node) => node.depth === 0).map((node) => node.id)]);
-  const nodes = graph.nodes.filter((node) => kept.has(node.id) && matchesPathFilters(node.path, filters));
-  const nodeIds = new Set(nodes.map((node) => node.id));
+/** Apply path filters and a row limit, then retain only nodes connected to a surviving seed. */
+export function graphForItems(graph: Graph, filters: PathFilters = {}, itemIds?: ReadonlySet<string>): Graph {
+  const allowed = new Set(graph.nodes.filter((node) => matchesPathFilters(node.path, filters) && (itemIds === undefined || node.depth === 0 || itemIds.has(node.id))).map((node) => node.id));
+  const neighbors = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (!allowed.has(edge.from) || !allowed.has(edge.to)) continue;
+    const from = neighbors.get(edge.from) ?? [];
+    from.push(edge.to);
+    neighbors.set(edge.from, from);
+    const to = neighbors.get(edge.to) ?? [];
+    to.push(edge.from);
+    neighbors.set(edge.to, to);
+  }
+  const kept = new Set(graph.nodes.filter((node) => node.depth === 0 && allowed.has(node.id)).map((node) => node.id));
+  const frontier = [...kept];
+  for (let i = 0; i < frontier.length; i++) {
+    for (const neighbor of neighbors.get(frontier[i]!) ?? []) {
+      if (!kept.has(neighbor)) {
+        kept.add(neighbor);
+        frontier.push(neighbor);
+      }
+    }
+  }
   return {
-    nodes,
-    edges: graph.edges.filter((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to)),
-    unresolved: graph.unresolved.filter((edge) => nodeIds.has(edge.from)),
+    nodes: graph.nodes.filter((node) => kept.has(node.id)),
+    edges: graph.edges.filter((edge) => kept.has(edge.from) && kept.has(edge.to)),
+    unresolved: graph.unresolved.filter((edge) => kept.has(edge.from)),
   };
 }
 

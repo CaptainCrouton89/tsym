@@ -43,12 +43,20 @@ test('trace follows callees breadth-first, keeps the shallowest row, and records
 
   const union = await ast.trace(['run', 'shout']);
   assert.equal(union.graph!.nodes.filter((node) => node.depth === 0).length, 2);
+  assert.ok(!union.items.some((item) => item.qualifiedName === 'shout'));
   assert.ok(union.graph!.edges.some((edge) => union.graph!.nodes.find((node) => node.id === edge.from)?.qualifiedName === 'run' && union.graph!.nodes.find((node) => node.id === edge.to)?.qualifiedName === 'shout'));
 
   const filtered = await ast.trace('run', { exclude: 'src/greet.ts' });
   assert.equal(filtered.receipt.excluded, 5);
+  assert.equal(filtered.receipt.unresolved, 1);
   assert.deepEqual(filtered.graph!.nodes.map((node) => node.qualifiedName), ['run']);
   assert.equal(filtered.graph!.edges.length, 0);
+  assert.equal(filtered.graph!.unresolved.length, 1);
+
+  const limited = await ast.trace('run', { limit: 1 });
+  assert.deepEqual(limited.items.map((item) => item.qualifiedName), ['greet']);
+  assert.deepEqual(limited.graph!.nodes.map((node) => node.qualifiedName), ['run', 'greet']);
+  assert.equal(limited.receipt.unresolved, limited.graph!.unresolved.length);
 
   await assert.rejects(() => ast.trace([]), EmptySymbolList);
 });

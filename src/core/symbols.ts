@@ -60,14 +60,14 @@ export function uniqueSymbols<T extends { path: string; start: { line: number; c
 export async function resolveSymbol(ws: Workspace, raw: string, opts: ResolveOptions = {}): Promise<Symbol> {
   const address = parseAddress(ws, raw);
   if (address.kind === 'position') {
+    const synthetic = syntheticSymbolAt(ws, address.path, address.line, address.col);
+    if (synthetic) return synthetic;
     const syms = outline(ws, address.path).items;
     const atName = syms.filter((s) => s.namePos.line === address.line && (address.col === null || (address.col >= s.namePos.col && address.col <= s.namePos.col + s.name.length)));
     if (atName.length > 0) return atName[0]!;
     // Innermost declaration whose range contains the line.
     const containing = syms.filter((s) => s.start.line <= address.line && address.line <= s.end.line);
     if (containing.length > 0) return containing.reduce((best, s) => (s.end.line - s.start.line < best.end.line - best.start.line ? s : best));
-    const synthetic = syntheticSymbolAt(ws, address.path, address.line, address.col);
-    if (synthetic) return synthetic;
     throw new SymbolNotFound(raw);
   }
   const inFile = opts.path ? ws.rel(ws.abs(opts.path)) : undefined;
@@ -83,9 +83,9 @@ export async function resolveSymbol(ws: Workspace, raw: string, opts: ResolveOpt
 /** Module and re-export graph nodes do not appear in `outline`, but their graph addresses remain usable. */
 function syntheticSymbolAt(ws: Workspace, path: string, line: number, col: number | null): Symbol | null {
   const source = sourceFileFor(ws, path);
-  if (line === 1 && col === 1) {
+  if (line === 0) {
     const loc = locOf(ws, source);
-    return { ...loc, kind: 'module', name: path.split('/').pop() ?? path, qualifiedName: path, exported: false, text: '(module scope)', namePos: loc.start };
+    return { ...loc, start: { line: 0, col: 0 }, kind: 'module', name: path.split('/').pop() ?? path, qualifiedName: path, exported: false, text: '(module scope)', namePos: loc.start };
   }
   if (col === null) return null;
   const pos = source.compilerNode.getPositionOfLineAndCharacter(line - 1, col - 1);

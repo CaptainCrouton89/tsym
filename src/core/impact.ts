@@ -35,10 +35,12 @@ export async function impact(ws: Workspace, addresses: string | readonly string[
         const k = key(caller);
         addEdge(edges, k, current.graphId, caller.callSites);
         const { id: callerId, ...row } = caller;
-        const existing = rows.get(k);
-        if (existing) existing.callSites += row.callSites;
-        else rows.set(k, row);
-        if (seen.has(k)) continue;
+        if (seen.has(k)) {
+          const existing = rows.get(k);
+          if (existing) existing.callSites += row.callSites;
+          continue;
+        }
+        rows.set(k, row);
         seen.add(k);
         nodes.set(k, graphNodeFromCaller(caller));
         if (callerId) next.push({ id: callerId, graphId: k });
@@ -57,18 +59,24 @@ export async function impact(ws: Workspace, addresses: string | readonly string[
       const row: Caller = { ...locOf(ws, stmt), kind: 'export', name: spec.getName(), qualifiedName: spec.getAliasNode()?.getText() ?? spec.getName(), depth: 1, callSites: 1, text: lineTextAt(stmt) };
       const k = key(row);
       addEdge(edges, k, address(symbol), row.callSites);
-      const existing = rows.get(k);
-      if (existing) existing.callSites += row.callSites;
-      else rows.set(k, row);
-      if (seen.has(k)) continue;
+      if (seen.has(k)) {
+        const existing = rows.get(k);
+        if (existing) existing.callSites += row.callSites;
+        continue;
+      }
+      rows.set(k, row);
       seen.add(k);
       nodes.set(k, graphNodeFromCaller(row));
     }
   }
 
-  const items = [...rows.values()].sort(compareCallers);
-  const finished = finish({ command: 'impact', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit, ...opts }, items);
-  return { ...finished, graph: graphForItems({ nodes: [...nodes.values()], edges: [...edges.values()], unresolved: [] }, finished.items, opts) };
+  const filteredGraph = graphForItems({ nodes: [...nodes.values()], edges: [...edges.values()], unresolved: [] }, opts);
+  const nodeIds = new Set(filteredGraph.nodes.map((node) => node.id));
+  const items = [...rows.values()].filter((row) => nodeIds.has(key(row))).sort(compareCallers);
+  const finished = finish({ command: 'impact', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit }, items);
+  const graph = graphForItems(filteredGraph, {}, new Set(finished.items.map(key)));
+  finished.receipt.excluded = rows.size - items.length;
+  return { ...finished, graph };
 }
 
 function key(loc: { path: string; start: { line: number; col: number } }): string {

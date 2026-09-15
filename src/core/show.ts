@@ -10,7 +10,7 @@ export async function show(ws: Workspace, address: string, opts: ShowOptions = {
   const startedAt = performance.now();
   const symbol = await resolveSymbol(ws, address, opts);
   const lines = ws.read(symbol.path).split('\n');
-  const startLine = docCommentStart(lines, symbol.start.line);
+  const startLine = symbol.kind === 'module' ? 1 : docCommentStart(lines, symbol.start.line);
   const source = lines.slice(startLine - 1, symbol.end.line).join('\n');
   const item: Excerpt = { path: symbol.path, start: { line: startLine, col: 1 }, end: symbol.end, symbol, source };
   return finish({ command: 'show', query: address, root: ws.root, engine: 'ast-grep', filesScanned: 1, startedAt, ...opts }, [item]);

@@ -84,7 +84,7 @@ function enclosingCaller(ws: Workspace, site: Node, depth: number): Caller & { i
   }
   const sf = site.getSourceFile();
   const rel = ws.rel(sf.getFilePath());
-  return { path: rel, start: { line: 1, col: 1 }, end: { line: sf.getEndLineNumber(), col: 1 }, kind: 'module', name: path.basename(rel), qualifiedName: rel, depth, callSites: 1, text: '(module scope)', id: null };
+  return { path: rel, start: { line: 0, col: 0 }, end: { line: sf.getEndLineNumber(), col: 1 }, kind: 'module', name: path.basename(rel), qualifiedName: rel, depth, callSites: 1, text: '(module scope)', id: null };
 }
 
 /** The statement or member that declares a function-like node: `const f = () => …` reports the whole `const` statement. */
