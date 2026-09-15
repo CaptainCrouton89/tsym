@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util';
 import { renderGraph } from './core/render-graph.js';
 import { formatReceipt } from './core/receipt.js';
-import { AmbiguousSymbol, SymbolNotFound } from './core/symbols.js';
+import { AmbiguousSymbol, EmptySymbolList, SymbolNotFound } from './core/symbols.js';
 import { SYMBOL_KINDS, type Callee, type Caller, type Excerpt, type Loc, type Match, type Receipt, type Ref, type Result, type Symbol, type SymbolKind } from './core/types.js';
 import { NoProject } from './core/workspace.js';
 import { openWorkspace } from './index.js';
@@ -12,14 +12,14 @@ Usage: ast <command> <arg> [options]
 
 Commands
   outline <file>                 symbols declared in one file (top-level and members)
-  find <name> [--kind K] [--in G] where a symbol is declared; <name> may be Outer.member or a glob like handle*
+  find <name> [--kind K]         where a symbol is declared; <name> may be Outer.member or a glob like handle*
   show <symbol> [--numbers]      source of one declaration, with its doc comment
-  search <pattern> [--in G]      structural pattern match; $A matches one node, $$$ARGS a sequence
-  refs <symbol>                  every reference site (declaration excluded); writes marked
-  callers <symbol>               functions/methods that call it, one row per caller
-  calls <symbol>                 functions/methods/constructors it calls, one row per callee
-  impact <symbol> [--depth N]    transitive callers up to N levels (default 3), plus re-exports
-  trace <symbol> [--depth N]     transitive callees up to N levels (default 3)
+  search <pattern>               structural pattern match; $A matches one node, $$$ARGS a sequence
+  refs <symbol>...               every reference site (declarations excluded); writes marked
+  callers <symbol>...            functions/methods that call them, one row per caller
+  calls <symbol>...              functions/methods/constructors they call, one row per callee
+  impact <symbol>... [--depth N] transitive callers up to N levels (default 3), plus re-exports
+  trace <symbol>... [--depth N]  transitive callees up to N levels (default 3)
 
 <symbol> is a name (reviveNode), a member (Broker.start), or a position (src/a.ts:41:17) as printed by
 find, grep, or any ast command — so results chain: ast find Foo | cut -d: -f1-3 | xargs ast refs.
@@ -35,7 +35,8 @@ Every run prints a one-line receipt on stderr: items, files matched, files scann
 Only --limit N truncates a result. Exit 0 with items, 1 with none, 2 on a bad symbol or usage.
 
 Options
-  --in GLOB      restrict find/search to files matching GLOB or under directory GLOB
+  --in GLOB      restrict rows to paths matching GLOB or under directory GLOB (repeatable; every command)
+  --exclude GLOB remove rows matching GLOB or under directory GLOB (repeatable; every command; wins over --in)
   --kind KIND    ${SYMBOL_KINDS.join(' | ')}
   --path FILE    resolve a symbol name inside one file
   --depth N      impact/trace: levels of callers/callees to follow (default 3)
@@ -56,7 +57,8 @@ async function main(argv: string[]): Promise<number> {
       graph: { type: 'boolean', default: false },
       numbers: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
-      in: { type: 'string' },
+      in: { type: 'string', multiple: true },
+      exclude: { type: 'string', multiple: true },
       kind: { type: 'string' },
       path: { type: 'string' },
       depth: { type: 'string' },
@@ -64,73 +66,77 @@ async function main(argv: string[]): Promise<number> {
       cwd: { type: 'string' },
     },
   });
-  const [command, arg] = positionals;
+  const [command, ...args] = positionals;
   if (values.help || !command) {
     process.stdout.write(USAGE);
     return values.help ? 0 : 2;
   }
-  if (!arg) return usageError(`${command} needs an argument`);
+  if (args.length === 0) return usageError(`${command} needs an argument`);
+  const multiSeed = command === 'refs' || command === 'callers' || command === 'calls' || command === 'impact' || command === 'trace';
+  if (!multiSeed && args.length > 1) return usageError(`${command} takes one argument`);
+  const arg = args[0]!;
   if (values.graph && command !== 'trace' && command !== 'impact') return usageError(`--graph is only valid with trace or impact`);
   if (values.graph && (values.json || values.paths || values.ranges)) return usageError(`--graph cannot be combined with another output mode`);
   if (values.kind && !SYMBOL_KINDS.includes(values.kind as SymbolKind)) return usageError(`--kind must be one of ${SYMBOL_KINDS.join(', ')}`);
   const limit = values.limit ? Number(values.limit) : null;
   const depth = values.depth ? Number(values.depth) : undefined;
   const ast = openWorkspace(values.cwd);
+  const filters = { in: values.in, exclude: values.exclude };
   const mode = values.graph ? 'graph' : values.json ? 'json' : values.paths ? 'paths' : values.ranges ? 'ranges' : 'lines';
 
   let result: Result<Loc>;
   let lines: string[];
   switch (command) {
     case 'outline': {
-      const r = ast.outline(arg);
+      const r = ast.outline(arg, filters);
       result = r;
       lines = r.items.map(symbolLine);
       break;
     }
     case 'find': {
-      const r = await ast.find(arg, { kind: values.kind as SymbolKind | undefined, in: values.in, limit });
+      const r = await ast.find(arg, { kind: values.kind as SymbolKind | undefined, limit, ...filters });
       result = r;
       lines = r.items.map(symbolLine);
       break;
     }
     case 'show': {
-      const r = await ast.show(arg, { path: values.path });
+      const r = await ast.show(arg, { path: values.path, ...filters });
       result = r;
       lines = r.items.flatMap((e) => excerptLines(e, values.numbers));
       break;
     }
     case 'search': {
-      const r = await ast.search(arg, { in: values.in, limit });
+      const r = await ast.search(arg, { limit, ...filters });
       result = r;
       lines = r.items.map(matchLine);
       break;
     }
     case 'refs': {
-      const r = await ast.refs(arg, { path: values.path, limit });
+      const r = await ast.refs(args, { path: values.path, limit, ...filters });
       result = r;
       lines = r.items.map(refLine);
       break;
     }
     case 'callers': {
-      const r = await ast.callers(arg, { path: values.path, limit });
+      const r = await ast.callers(args, { path: values.path, limit, ...filters });
       result = r;
       lines = r.items.map((c) => callerLine(c, false));
       break;
     }
     case 'calls': {
-      const r = await ast.calls(arg, { path: values.path, limit });
+      const r = await ast.calls(args, { path: values.path, limit, ...filters });
       result = r;
       lines = r.items.map((c) => calleeLine(c, false));
       break;
     }
     case 'impact': {
-      const r = await ast.impact(arg, { path: values.path, depth, limit });
+      const r = await ast.impact(args, { path: values.path, depth, limit, ...filters });
       result = r;
       lines = r.items.map((c) => callerLine(c, true));
       break;
     }
     case 'trace': {
-      const r = await ast.trace(arg, { path: values.path, depth, limit });
+      const r = await ast.trace(args, { path: values.path, depth, limit, ...filters });
       result = r;
       lines = r.items.map((c) => calleeLine(c, true));
       break;
@@ -203,7 +209,7 @@ function usageError(msg: string): number {
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (err: unknown) => {
-    if (err instanceof AmbiguousSymbol || err instanceof SymbolNotFound || err instanceof NoProject) {
+    if (err instanceof AmbiguousSymbol || err instanceof EmptySymbolList || err instanceof SymbolNotFound || err instanceof NoProject) {
       process.stderr.write(`ast: ${err.message}\n`);
       process.exit(2);
     }

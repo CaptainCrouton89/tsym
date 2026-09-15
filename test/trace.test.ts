@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { renderGraph } from '../src/core/render-graph.js';
+import { EmptySymbolList } from '../src/index.js';
 import { ast } from './_fixture.js';
 
 test('trace follows callees breadth-first, keeps the shallowest row, and records dispatch sites', async () => {
@@ -39,6 +40,17 @@ test('trace follows callees breadth-first, keeps the shallowest row, and records
   const multiple = await ast.trace('useBoth');
   assert.deepEqual(multiple.items.map((callee) => callee.name), ['first', 'second']);
   assert.equal(new Set(multiple.graph!.nodes.map((node) => node.id)).size, 3);
+
+  const union = await ast.trace(['run', 'shout']);
+  assert.equal(union.graph!.nodes.filter((node) => node.depth === 0).length, 2);
+  assert.ok(union.graph!.edges.some((edge) => union.graph!.nodes.find((node) => node.id === edge.from)?.qualifiedName === 'run' && union.graph!.nodes.find((node) => node.id === edge.to)?.qualifiedName === 'shout'));
+
+  const filtered = await ast.trace('run', { exclude: 'src/greet.ts' });
+  assert.equal(filtered.receipt.excluded, 5);
+  assert.deepEqual(filtered.graph!.nodes.map((node) => node.qualifiedName), ['run']);
+  assert.equal(filtered.graph!.edges.length, 0);
+
+  await assert.rejects(() => ast.trace([]), EmptySymbolList);
 });
 
 test('renderGraph groups declarations by directory and shows unresolved edges', async () => {

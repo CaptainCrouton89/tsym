@@ -11,6 +11,7 @@ test('impact follows callers transitively to the requested depth and lists re-ex
       [1, 'export', 'hello'],
       [1, 'function', 'shout'],
       [1, 'method', 'Greeter.say'],
+      [1, 'function', 'testCaller'],
       [2, 'module', 'src/main.ts'],
     ],
   );
@@ -23,4 +24,13 @@ test('impact follows callers transitively to the requested depth and lists re-ex
   }
   const shallow = await ast.impact('greet', { depth: 1 });
   assert.ok(shallow.items.every((c) => c.depth === 1));
+
+  const filtered = await ast.impact('greet', { exclude: '**/*.test.ts' });
+  assert.equal(filtered.receipt.excluded, 1);
+  assert.ok(filtered.graph!.nodes.every((node) => !node.path.endsWith('.test.ts')));
+  assert.ok(filtered.graph!.edges.every((edge) => filtered.graph!.nodes.some((node) => node.id === edge.from) && filtered.graph!.nodes.some((node) => node.id === edge.to)));
+
+  const multiple = await ast.impact(['greet', 'shout']);
+  assert.equal(multiple.graph!.nodes.filter((node) => node.depth === 0).length, 2);
+  assert.equal(new Set(multiple.items.map((item) => `${item.path}:${item.start.line}:${item.start.col}`)).size, multiple.items.length);
 });

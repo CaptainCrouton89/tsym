@@ -1,15 +1,17 @@
 import { parse, type SgNode, type SgRoot } from '@ast-grep/napi';
-import { finish } from './receipt.js';
+import { finish, type PathFilters } from './receipt.js';
 import type { Pos, Result, Symbol, SymbolKind } from './types.js';
 import { langFor, type Workspace } from './workspace.js';
 
+export interface OutlineOptions extends PathFilters {}
+
 /** Symbols declared in one file: top-level declarations and class/interface/enum/namespace members. */
-export function outline(ws: Workspace, file: string): Result<Symbol> {
+export function outline(ws: Workspace, file: string, opts: OutlineOptions = {}): Result<Symbol> {
   const startedAt = performance.now();
   const rel = ws.rel(ws.abs(file));
   const root = parseFile(ws, rel);
   const items = root ? outlineRoot(root, rel) : [];
-  return finish({ command: 'outline', query: rel, root: ws.root, engine: 'ast-grep', filesScanned: root ? 1 : 0, startedAt }, items);
+  return finish({ command: 'outline', query: rel, root: ws.root, engine: 'ast-grep', filesScanned: root ? 1 : 0, startedAt, ...opts }, items);
 }
 
 export function parseFile(ws: Workspace, rel: string): SgRoot | null {

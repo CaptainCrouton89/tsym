@@ -28,4 +28,8 @@ test('outline lists top-level declarations and members with kinds, names, and ex
   assert.equal(items[0]!.end.line, 4);
   assert.equal(receipt.engine, 'ast-grep');
   assert.equal(receipt.files_scanned, 1);
+
+  const filtered = ast.outline('src/greet.ts', { exclude: 'src/greet.ts' });
+  assert.equal(filtered.items.length, 0);
+  assert.equal(filtered.receipt.excluded, 14);
 });

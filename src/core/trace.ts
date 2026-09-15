@@ -1,28 +1,29 @@
 import { calleesOf } from './callees.js';
-import { finish } from './receipt.js';
-import { resolveSymbol, type ResolveOptions } from './symbols.js';
+import { finish, matchesPathFilters, type PathFilters } from './receipt.js';
+import { asAddresses, resolveSymbol, uniqueSymbols, type ResolveOptions } from './symbols.js';
 import { declarationForSymbol } from './ts-program.js';
 import type { Callee, Graph, GraphEdge, GraphNode, Result, Symbol } from './types.js';
 import type { Workspace } from './workspace.js';
 
-export interface TraceOptions extends ResolveOptions {
+export interface TraceOptions extends ResolveOptions, PathFilters {
   /** How many callee levels to follow. Default 3. */
   depth?: number;
   limit?: number | null;
 }
 
-/** Transitive callees of a symbol up to `depth` levels, breadth-first and listed once at their shallowest depth. */
-export async function trace(ws: Workspace, address: string, opts: TraceOptions = {}): Promise<Result<Callee>> {
+/** Transitive callees of one or more symbols up to `depth` levels, breadth-first and listed once at their shallowest depth. */
+export async function trace(ws: Workspace, addresses: string | readonly string[], opts: TraceOptions = {}): Promise<Result<Callee>> {
   const startedAt = performance.now();
   const maxDepth = opts.depth ?? 3;
-  const symbol = await resolveSymbol(ws, address, opts);
-  const root = graphNodeFromSymbol(symbol);
-  const nodes = new Map<string, GraphNode>([[root.id, root]]);
+  const inputs = asAddresses(addresses);
+  const symbols = uniqueSymbols(await Promise.all(inputs.map((address) => resolveSymbol(ws, address, opts))));
+  const roots = symbols.map(graphNodeFromSymbol);
+  const nodes = new Map(roots.map((root) => [root.id, root]));
   const edges = new Map<string, GraphEdge>();
   const unresolved: import('./types.js').UnresolvedEdge[] = [];
-  const seen = new Set<string>([root.id]);
-  const items: Callee[] = [];
-  let frontier: Array<{ declaration: import('ts-morph').Node; id: string }> = [{ declaration: declarationForSymbol(ws, symbol), id: root.id }];
+  const seen = new Set(nodes.keys());
+  const rows = new Map<string, Callee>();
+  let frontier: Array<{ declaration: import('ts-morph').Node; id: string }> = symbols.map((symbol) => ({ declaration: declarationForSymbol(ws, symbol), id: address(symbol) }));
 
   for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth++) {
     const next: typeof frontier = [];
@@ -32,20 +33,22 @@ export async function trace(ws: Workspace, address: string, opts: TraceOptions =
       for (const callee of result.items) {
         const node = graphNodeFromCallee(callee);
         addEdge(edges, current.id, node.id, callee.callSites);
+        const { declaration: _declaration, callable: _callable, ...row } = callee;
+        const existing = rows.get(node.id);
+        if (existing) existing.callSites += row.callSites;
+        else rows.set(node.id, row);
         if (seen.has(node.id)) continue;
         seen.add(node.id);
         nodes.set(node.id, node);
-        const { declaration: _declaration, callable: _callable, ...row } = callee;
-        items.push(row);
         next.push({ declaration: callee.callable, id: node.id });
       }
     }
     frontier = next;
   }
 
-  items.sort(compareCallees);
-  const finished = finish({ command: 'trace', query: address, root: ws.root, engine: 'ts-morph', filesScanned: ws.projectFor(symbol.path).getSourceFiles().length, startedAt, limit: opts.limit, unresolved: unresolved.length }, items);
-  return { ...finished, graph: graphForItems({ nodes: [...nodes.values()], edges: [...edges.values()], unresolved }, finished.items) };
+  const items = [...rows.values()].sort(compareCallees);
+  const finished = finish({ command: 'trace', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit, unresolved: unresolved.length, ...opts }, items);
+  return { ...finished, graph: graphForItems({ nodes: [...nodes.values()], edges: [...edges.values()], unresolved }, finished.items, opts) };
 }
 
 export function graphNodeFromSymbol(symbol: Symbol): GraphNode {
@@ -67,13 +70,15 @@ export function addEdge(edges: Map<string, GraphEdge>, from: string, to: string,
   else edges.set(key, { from, to, callSites });
 }
 
-/** Keep a limited traversal graph aligned with the rows emitted beside it. */
-export function graphForItems(graph: Graph, items: Array<{ path: string; start: { line: number; col: number } }>): Graph {
+/** Keep a limited traversal graph aligned with emitted rows and path filters. */
+export function graphForItems(graph: Graph, items: Array<{ path: string; start: { line: number; col: number } }>, filters: PathFilters = {}): Graph {
   const kept = new Set([...items.map(address), ...graph.nodes.filter((node) => node.depth === 0).map((node) => node.id)]);
+  const nodes = graph.nodes.filter((node) => kept.has(node.id) && matchesPathFilters(node.path, filters));
+  const nodeIds = new Set(nodes.map((node) => node.id));
   return {
-    nodes: graph.nodes.filter((node) => kept.has(node.id)),
-    edges: graph.edges.filter((edge) => kept.has(edge.from) && kept.has(edge.to)),
-    unresolved: graph.unresolved.filter((edge) => kept.has(edge.from)),
+    nodes,
+    edges: graph.edges.filter((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to)),
+    unresolved: graph.unresolved.filter((edge) => nodeIds.has(edge.from)),
   };
 }
 

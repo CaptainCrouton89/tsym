@@ -134,6 +134,8 @@ export interface Receipt {
   limit: number | null;
   engine: Engine;
   elapsed_ms: number;
+  /** Rows removed by --in/--exclude. */
+  excluded: number;
   /** Call sites seen but not followed (external + dispatch + dynamic). */
   unresolved: number;
 }

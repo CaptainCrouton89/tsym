@@ -1,19 +1,38 @@
 import { calleesOf } from './callees.js';
-import { finish } from './receipt.js';
-import { resolveSymbol, type ResolveOptions } from './symbols.js';
+import { finish, type PathFilters } from './receipt.js';
+import { asAddresses, resolveSymbol, uniqueSymbols, type ResolveOptions } from './symbols.js';
 import { declarationForSymbol } from './ts-program.js';
 import type { Callee, Result } from './types.js';
 import type { Workspace } from './workspace.js';
 
-export interface CallsOptions extends ResolveOptions {
+export interface CallsOptions extends ResolveOptions, PathFilters {
   limit?: number | null;
 }
 
-/** Direct callees of a function, method, or constructor. */
-export async function calls(ws: Workspace, address: string, opts: CallsOptions = {}): Promise<Result<Callee>> {
+/** Direct callees of one or more functions, methods, or constructors. */
+export async function calls(ws: Workspace, addresses: string | readonly string[], opts: CallsOptions = {}): Promise<Result<Callee>> {
   const startedAt = performance.now();
-  const symbol = await resolveSymbol(ws, address, opts);
-  const result = calleesOf(ws, declarationForSymbol(ws, symbol), 1);
-  const items = result.items.map(({ declaration: _declaration, callable: _callable, ...callee }) => callee);
-  return finish({ command: 'calls', query: address, root: ws.root, engine: 'ts-morph', filesScanned: ws.projectFor(symbol.path).getSourceFiles().length, startedAt, limit: opts.limit, unresolved: result.unresolved.length }, items);
+  const inputs = asAddresses(addresses);
+  const symbols = uniqueSymbols(await Promise.all(inputs.map((address) => resolveSymbol(ws, address, opts))));
+  const byKey = new Map<string, Callee>();
+  const unresolved = new Set<string>();
+  for (const symbol of symbols) {
+    const result = calleesOf(ws, declarationForSymbol(ws, symbol), 1);
+    for (const edge of result.unresolved) unresolved.add(`${edge.from}:${edge.start.line}:${edge.start.col}`);
+    for (const { declaration: _declaration, callable: _callable, ...callee } of result.items) {
+      const existing = byKey.get(key(callee));
+      if (existing) existing.callSites += callee.callSites;
+      else byKey.set(key(callee), callee);
+    }
+  }
+  const items = [...byKey.values()].sort(compareCallees);
+  return finish({ command: 'calls', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit, unresolved: unresolved.size, ...opts }, items);
+}
+
+function key(loc: { path: string; start: { line: number; col: number } }): string {
+  return `${loc.path}:${loc.start.line}:${loc.start.col}`;
+}
+
+function compareCallees(a: Callee, b: Callee): number {
+  return a.path < b.path ? -1 : a.path > b.path ? 1 : a.start.line - b.start.line || a.start.col - b.start.col;
 }

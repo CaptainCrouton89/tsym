@@ -15,7 +15,20 @@ test('find by exact name, member name, and glob; --kind and --in narrow; limit t
 
   const scoped = await ast.find('run', { in: 'src/main.ts' });
   assert.equal(scoped.items.length, 0);
-  assert.equal(scoped.receipt.files_scanned, 1);
+  assert.equal(scoped.receipt.files_scanned, 4);
+  assert.equal(scoped.receipt.excluded, 1);
+
+  const filtered = await ast.find('*', { exclude: '**/*.test.ts' });
+  assert.ok(filtered.items.every((item) => !item.path.endsWith('.test.ts')));
+  assert.equal(filtered.receipt.excluded, 1);
+
+  const repeated = await ast.find('greet', { in: ['src/app.ts', 'src/greet.ts'] });
+  assert.equal(repeated.items.length, 1);
+  assert.equal(repeated.receipt.files_scanned, 4);
+
+  const bareName = await ast.find('greet', { in: 'greet.ts' });
+  assert.equal(bareName.items.length, 1);
+  assert.equal(bareName.receipt.files_scanned, 4);
 
   const limited = await ast.find('*', { limit: 2 });
   assert.equal(limited.items.length, 2);

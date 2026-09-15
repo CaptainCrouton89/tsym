@@ -13,6 +13,10 @@ test('show returns the declaration with its doc comment; position and name addre
 
   const byLine = await ast.show('src/greet.ts:3');
   assert.equal(byLine.items[0]!.symbol.name, 'greet');
+
+  const filtered = await ast.show('greet', { exclude: 'src/greet.ts' });
+  assert.equal(filtered.items.length, 0);
+  assert.equal(filtered.receipt.excluded, 1);
 });
 
 test('show fails on unknown and ambiguous names', async () => {

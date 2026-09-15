@@ -1,22 +1,30 @@
 import path from 'node:path';
 import { Node } from 'ts-morph';
-import { finish } from './receipt.js';
-import { resolveSymbol, type ResolveOptions } from './symbols.js';
+import { finish, type PathFilters } from './receipt.js';
+import { asAddresses, resolveSymbol, uniqueSymbols, type ResolveOptions } from './symbols.js';
 import { lineTextAt, locOf, nameIdentifier, referencesTo, type NameNode } from './ts-program.js';
 import type { Caller, Result } from './types.js';
 import type { Workspace } from './workspace.js';
 
-export interface CallersOptions extends ResolveOptions {
+export interface CallersOptions extends ResolveOptions, PathFilters {
   limit?: number | null;
 }
 
-/** Functions and methods that call the symbol (call, `new`, tagged template, or JSX element), one row per caller. */
-export async function callers(ws: Workspace, address: string, opts: CallersOptions = {}): Promise<Result<Caller>> {
+/** Functions and methods that call one or more symbols (call, `new`, tagged template, or JSX element), one row per caller. */
+export async function callers(ws: Workspace, addresses: string | readonly string[], opts: CallersOptions = {}): Promise<Result<Caller>> {
   const startedAt = performance.now();
-  const symbol = await resolveSymbol(ws, address, opts);
-  const id = nameIdentifier(ws, symbol);
-  const items = callersOf(ws, id, 1);
-  return finish({ command: 'callers', query: address, root: ws.root, engine: 'ts-morph', filesScanned: ws.projectFor(symbol.path).getSourceFiles().length, startedAt, limit: opts.limit }, items);
+  const inputs = asAddresses(addresses);
+  const symbols = uniqueSymbols(await Promise.all(inputs.map((address) => resolveSymbol(ws, address, opts))));
+  const byKey = new Map<string, Caller & { id: NameNode | null }>();
+  for (const symbol of symbols) {
+    for (const caller of callersOf(ws, nameIdentifier(ws, symbol), 1)) {
+      const existing = byKey.get(key(caller));
+      if (existing) existing.callSites += caller.callSites;
+      else byKey.set(key(caller), caller);
+    }
+  }
+  const items = [...byKey.values()].sort(compareCallers);
+  return finish({ command: 'callers', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit, ...opts }, items);
 }
 
 /** Direct callers of the declaration named by `id`, each carrying the identifier that names it (for recursion). */
@@ -31,7 +39,15 @@ export function callersOf(ws: Workspace, id: NameNode, depth: number): Array<Cal
     if (existing) existing.callSites += 1;
     else byKey.set(key, caller);
   }
-  return [...byKey.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.start.line - b.start.line));
+  return [...byKey.values()].sort(compareCallers);
+}
+
+function key(loc: { path: string; start: { line: number; col: number } }): string {
+  return `${loc.path}:${loc.start.line}:${loc.start.col}`;
+}
+
+function compareCallers(a: Caller, b: Caller): number {
+  return a.path < b.path ? -1 : a.path > b.path ? 1 : a.start.line - b.start.line || a.start.col - b.start.col;
 }
 
 function isCallSite(n: Node): boolean {

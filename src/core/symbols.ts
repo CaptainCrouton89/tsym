@@ -15,6 +15,12 @@ export class SymbolNotFound extends Error {
   }
 }
 
+export class EmptySymbolList extends Error {
+  constructor() {
+    super('at least one symbol is required');
+  }
+}
+
 export class AmbiguousSymbol extends Error {
   readonly candidates: Symbol[];
   constructor(address: string, candidates: Symbol[]) {
@@ -38,6 +44,16 @@ export function parseAddress(ws: Workspace, raw: string): Address {
 export interface ResolveOptions {
   /** Restrict a name lookup to one file. */
   path?: string;
+}
+
+export function asAddresses(addresses: string | readonly string[]): readonly string[] {
+  const values = typeof addresses === 'string' ? [addresses] : addresses;
+  if (values.length === 0) throw new EmptySymbolList();
+  return values;
+}
+
+export function uniqueSymbols<T extends { path: string; start: { line: number; col: number } }>(symbols: readonly T[]): T[] {
+  return [...new Map(symbols.map((symbol) => [`${symbol.path}:${symbol.start.line}:${symbol.start.col}`, symbol])).values()];
 }
 
 /** Resolve an address to exactly one declaration, or throw SymbolNotFound / AmbiguousSymbol. */

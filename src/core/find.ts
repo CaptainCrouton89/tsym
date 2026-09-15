@@ -1,14 +1,12 @@
 import { parseFiles, type SgRoot } from '@ast-grep/napi';
 import { outlineRoot } from './outline.js';
-import { finish } from './receipt.js';
+import { finish, type PathFilters } from './receipt.js';
 import type { Result, Symbol, SymbolKind } from './types.js';
 import { langFor, type Workspace } from './workspace.js';
 
-export interface FindOptions {
+export interface FindOptions extends PathFilters {
   /** Restrict to one declaration kind. */
   kind?: SymbolKind;
-  /** Restrict to files matching this glob (or under this directory). */
-  in?: string;
   limit?: number | null;
 }
 
@@ -18,7 +16,7 @@ export interface FindOptions {
  */
 export async function find(ws: Workspace, query: string, opts: FindOptions = {}): Promise<Result<Symbol>> {
   const startedAt = performance.now();
-  const files = ws.files(opts.in);
+  const files = ws.files();
   const matches = matcherFor(query);
   const found: Symbol[] = [];
   const scanned = await parseAll(ws, files, (root, rel) => {
@@ -28,7 +26,7 @@ export async function find(ws: Workspace, query: string, opts: FindOptions = {})
     }
   });
   found.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.start.line - b.start.line));
-  return finish({ command: 'find', query, root: ws.root, engine: 'ast-grep', filesScanned: scanned, startedAt, limit: opts.limit }, found);
+  return finish({ command: 'find', query, root: ws.root, engine: 'ast-grep', filesScanned: scanned, startedAt, limit: opts.limit, ...opts }, found);
 }
 
 /** Parse every file in parallel (Rust threads); the callback runs per file on the JS thread. */

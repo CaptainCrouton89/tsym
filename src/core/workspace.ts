@@ -46,10 +46,11 @@ export class Workspace {
    * Uses `git ls-files` (tracked + untracked, honoring .gitignore) when the root is in a git repo,
    * else a directory walk that skips node_modules/dist/build/.git.
    */
-  files(glob?: string): string[] {
+  files(globs?: string | readonly string[]): string[] {
     if (!this.fileList) this.fileList = listFiles(this.root);
-    if (!glob) return this.fileList;
-    return this.fileList.filter((f) => matchesGlob(f, glob));
+    if (!globs) return this.fileList;
+    const patterns = typeof globs === 'string' ? [globs] : globs;
+    return this.fileList.filter((f) => patterns.some((glob) => matchesGlob(f, glob)));
   }
 
   /**
@@ -130,8 +131,11 @@ export function langFor(file: string): Lang | null {
 }
 
 export function matchesGlob(file: string, glob: string): boolean {
-  // A bare directory or name matches as a prefix / anywhere; a real glob goes to path.matchesGlob.
-  if (!/[*?[{]/.test(glob)) return file === glob || file.startsWith(glob.replace(/\/$/, '') + '/');
+  // A bare directory matches as a prefix; a bare filename matches in any directory.
+  if (!/[*?[{]/.test(glob)) {
+    const normalized = glob.replace(/\/$/, '');
+    return file === normalized || file.startsWith(normalized + '/') || (!normalized.includes('/') && file.split('/').includes(normalized));
+  }
   const pattern = glob.includes('/') ? glob : `**/${glob}`;
   return path.matchesGlob(file, pattern);
 }

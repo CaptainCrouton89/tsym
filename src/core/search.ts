@@ -1,12 +1,11 @@
 import { findInFiles, Lang } from '@ast-grep/napi';
 import { drained } from './find.js';
 import { firstLine } from './outline.js';
-import { finish } from './receipt.js';
+import { finish, type PathFilters } from './receipt.js';
 import type { Match, Result } from './types.js';
 import { langFor, type Workspace } from './workspace.js';
 
-export interface SearchOptions {
-  in?: string;
+export interface SearchOptions extends PathFilters {
   limit?: number | null;
 }
 
@@ -17,7 +16,7 @@ export interface SearchOptions {
 export async function search(ws: Workspace, pattern: string, opts: SearchOptions = {}): Promise<Result<Match>> {
   const startedAt = performance.now();
   const byLang = new Map<Lang, string[]>();
-  for (const f of ws.files(opts.in)) {
+  for (const f of ws.files()) {
     const lang = langFor(f);
     if (lang === null) continue;
     (byLang.get(lang) ?? byLang.set(lang, []).get(lang)!).push(ws.abs(f));
@@ -43,5 +42,5 @@ export async function search(ws: Workspace, pattern: string, opts: SearchOptions
     scanned += paths.length;
   }
   matches.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.start.line - b.start.line || a.start.col - b.start.col));
-  return finish({ command: 'search', query: pattern, root: ws.root, engine: 'ast-grep', filesScanned: scanned, startedAt, limit: opts.limit }, matches);
+  return finish({ command: 'search', query: pattern, root: ws.root, engine: 'ast-grep', filesScanned: scanned, startedAt, limit: opts.limit, ...opts }, matches);
 }
