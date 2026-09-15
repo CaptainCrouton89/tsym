@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs';
+import { Node } from 'ts-morph';
 import { find } from './find.js';
 import { outline } from './outline.js';
+import { locOf, sourceFileFor } from './ts-program.js';
 import type { Symbol } from './types.js';
 import type { Workspace } from './workspace.js';
 
@@ -47,8 +49,10 @@ export async function resolveSymbol(ws: Workspace, raw: string, opts: ResolveOpt
     if (atName.length > 0) return atName[0]!;
     // Innermost declaration whose range contains the line.
     const containing = syms.filter((s) => s.start.line <= address.line && address.line <= s.end.line);
-    if (containing.length === 0) throw new SymbolNotFound(raw);
-    return containing.reduce((best, s) => (s.end.line - s.start.line < best.end.line - best.start.line ? s : best));
+    if (containing.length > 0) return containing.reduce((best, s) => (s.end.line - s.start.line < best.end.line - best.start.line ? s : best));
+    const synthetic = syntheticSymbolAt(ws, address.path, address.line, address.col);
+    if (synthetic) return synthetic;
+    throw new SymbolNotFound(raw);
   }
   const inFile = opts.path ? ws.rel(ws.abs(opts.path)) : undefined;
   const found = (await find(ws, address.name, { in: inFile })).items;
@@ -58,4 +62,22 @@ export async function resolveSymbol(ws: Workspace, raw: string, opts: ResolveOpt
   const topLevel = found.filter((s) => s.qualifiedName === s.name);
   if (topLevel.length === 1) return topLevel[0]!;
   throw new AmbiguousSymbol(raw, found);
+}
+
+/** Module and re-export graph nodes do not appear in `outline`, but their graph addresses remain usable. */
+function syntheticSymbolAt(ws: Workspace, path: string, line: number, col: number | null): Symbol | null {
+  const source = sourceFileFor(ws, path);
+  if (line === 1 && col === 1) {
+    const loc = locOf(ws, source);
+    return { ...loc, kind: 'module', name: path.split('/').pop() ?? path, qualifiedName: path, exported: false, text: '(module scope)', namePos: loc.start };
+  }
+  if (col === null) return null;
+  const pos = source.compilerNode.getPositionOfLineAndCharacter(line - 1, col - 1);
+  let node = source.getDescendantAtPos(pos);
+  while (node && !Node.isExportDeclaration(node)) node = node.getParent();
+  if (!node) return null;
+  const specifier = node.getNamedExports()[0];
+  const name = specifier?.getAliasNode()?.getText() ?? specifier?.getName() ?? 'export';
+  const loc = locOf(ws, node);
+  return { ...loc, kind: 'export', name, qualifiedName: name, exported: true, text: node.getText().split('\n')[0]!.trim(), namePos: loc.start };
 }

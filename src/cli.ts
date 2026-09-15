@@ -1,7 +1,8 @@
 import { parseArgs } from 'node:util';
+import { renderGraph } from './core/render-graph.js';
 import { formatReceipt } from './core/receipt.js';
 import { AmbiguousSymbol, SymbolNotFound } from './core/symbols.js';
-import { SYMBOL_KINDS, type Caller, type Excerpt, type Loc, type Match, type Receipt, type Ref, type Result, type Symbol, type SymbolKind } from './core/types.js';
+import { SYMBOL_KINDS, type Callee, type Caller, type Excerpt, type Loc, type Match, type Receipt, type Ref, type Result, type Symbol, type SymbolKind } from './core/types.js';
 import { NoProject } from './core/workspace.js';
 import { openWorkspace } from './index.js';
 
@@ -16,7 +17,9 @@ Commands
   search <pattern> [--in G]      structural pattern match; $A matches one node, $$$ARGS a sequence
   refs <symbol>                  every reference site (declaration excluded); writes marked
   callers <symbol>               functions/methods that call it, one row per caller
+  calls <symbol>                 functions/methods/constructors it calls, one row per callee
   impact <symbol> [--depth N]    transitive callers up to N levels (default 3), plus re-exports
+  trace <symbol> [--depth N]     transitive callees up to N levels (default 3)
 
 <symbol> is a name (reviveNode), a member (Broker.start), or a position (src/a.ts:41:17) as printed by
 find, grep, or any ast command — so results chain: ast find Foo | cut -d: -f1-3 | xargs ast refs.
@@ -26,7 +29,8 @@ Output (stdout)
   default      path:line:col: text            grep-compatible
   --paths      unique paths, one per line
   --ranges     path:start-end, one per item
-  --json       { items, receipt }
+  --json       { items, graph, receipt } for trace/impact; { items, receipt } otherwise
+  --graph      Mermaid flowchart for trace/impact
 Every run prints a one-line receipt on stderr: items, files matched, files scanned, engine, elapsed.
 Only --limit N truncates a result. Exit 0 with items, 1 with none, 2 on a bad symbol or usage.
 
@@ -34,7 +38,8 @@ Options
   --in GLOB      restrict find/search to files matching GLOB or under directory GLOB
   --kind KIND    ${SYMBOL_KINDS.join(' | ')}
   --path FILE    resolve a symbol name inside one file
-  --depth N      impact: levels of callers to follow (default 3)
+  --depth N      impact/trace: levels of callers/callees to follow (default 3)
+  --graph        trace/impact: render a Mermaid flowchart
   --limit N      stop after N items (sets truncated in the receipt)
   --numbers      show: prefix each source line with its line number
   --cwd DIR      resolve the workspace from DIR instead of the current directory
@@ -48,6 +53,7 @@ async function main(argv: string[]): Promise<number> {
       paths: { type: 'boolean', default: false },
       ranges: { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
+      graph: { type: 'boolean', default: false },
       numbers: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
       in: { type: 'string' },
@@ -64,11 +70,13 @@ async function main(argv: string[]): Promise<number> {
     return values.help ? 0 : 2;
   }
   if (!arg) return usageError(`${command} needs an argument`);
+  if (values.graph && command !== 'trace' && command !== 'impact') return usageError(`--graph is only valid with trace or impact`);
+  if (values.graph && (values.json || values.paths || values.ranges)) return usageError(`--graph cannot be combined with another output mode`);
   if (values.kind && !SYMBOL_KINDS.includes(values.kind as SymbolKind)) return usageError(`--kind must be one of ${SYMBOL_KINDS.join(', ')}`);
   const limit = values.limit ? Number(values.limit) : null;
   const depth = values.depth ? Number(values.depth) : undefined;
   const ast = openWorkspace(values.cwd);
-  const mode = values.json ? 'json' : values.paths ? 'paths' : values.ranges ? 'ranges' : 'lines';
+  const mode = values.graph ? 'graph' : values.json ? 'json' : values.paths ? 'paths' : values.ranges ? 'ranges' : 'lines';
 
   let result: Result<Loc>;
   let lines: string[];
@@ -109,10 +117,22 @@ async function main(argv: string[]): Promise<number> {
       lines = r.items.map((c) => callerLine(c, false));
       break;
     }
+    case 'calls': {
+      const r = await ast.calls(arg, { path: values.path, limit });
+      result = r;
+      lines = r.items.map((c) => calleeLine(c, false));
+      break;
+    }
     case 'impact': {
       const r = await ast.impact(arg, { path: values.path, depth, limit });
       result = r;
       lines = r.items.map((c) => callerLine(c, true));
+      break;
+    }
+    case 'trace': {
+      const r = await ast.trace(arg, { path: values.path, depth, limit });
+      result = r;
+      lines = r.items.map((c) => calleeLine(c, true));
       break;
     }
     default:
@@ -123,7 +143,7 @@ async function main(argv: string[]): Promise<number> {
   return result.items.length > 0 ? 0 : 1;
 }
 
-function emit(result: Result<Loc>, lines: string[], mode: 'json' | 'paths' | 'ranges' | 'lines'): void {
+function emit(result: Result<Loc>, lines: string[], mode: 'json' | 'paths' | 'ranges' | 'lines' | 'graph'): void {
   let out: string;
   switch (mode) {
     case 'json':
@@ -137,6 +157,9 @@ function emit(result: Result<Loc>, lines: string[], mode: 'json' | 'paths' | 'ra
       break;
     case 'lines':
       out = lines.map((l) => l + '\n').join('');
+      break;
+    case 'graph':
+      out = renderGraph(result.graph ?? { nodes: [], edges: [], unresolved: [] });
       break;
   }
   process.stdout.write(out);
@@ -163,6 +186,11 @@ function refLine(r: Ref): string {
 }
 
 function callerLine(c: Caller, withDepth: boolean): string {
+  const extra = [withDepth ? `depth ${c.depth}` : null, c.callSites > 1 ? `${c.callSites} call sites` : null].filter(Boolean).join(', ');
+  return `${c.path}:${c.start.line}:${c.start.col}: ${c.kind} ${c.qualifiedName}  ${c.text}${extra ? `  [${extra}]` : ''}`;
+}
+
+function calleeLine(c: Callee, withDepth: boolean): string {
   const extra = [withDepth ? `depth ${c.depth}` : null, c.callSites > 1 ? `${c.callSites} call sites` : null].filter(Boolean).join(', ');
   return `${c.path}:${c.start.line}:${c.start.col}: ${c.kind} ${c.qualifiedName}  ${c.text}${extra ? `  [${extra}]` : ''}`;
 }

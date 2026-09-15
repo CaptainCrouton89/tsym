@@ -22,6 +22,20 @@ export function nameIdentifier(ws: Workspace, symbol: Symbol): NameNode {
   return node;
 }
 
+/** The source declaration to inspect for a symbol, including synthetic module and re-export graph nodes. */
+export function declarationForSymbol(ws: Workspace, symbol: Symbol): Node {
+  const sf = sourceFileFor(ws, symbol.path);
+  if (symbol.kind === 'module') return sf;
+  if (symbol.kind === 'export') {
+    const pos = sf.compilerNode.getPositionOfLineAndCharacter(symbol.start.line - 1, symbol.start.col - 1);
+    let node = sf.getDescendantAtPos(pos);
+    while (node && !Node.isExportDeclaration(node)) node = node.getParent();
+    if (node) return node;
+    throw new Error(`${symbol.path}:${symbol.start.line}:${symbol.start.col} is not an export declaration in the TypeScript program`);
+  }
+  return nameIdentifier(ws, symbol);
+}
+
 /** Every reference to the identifier's symbol, excluding the declarations themselves. */
 export function referencesTo(id: NameNode): ReferenceEntry[] {
   const out: ReferenceEntry[] = [];

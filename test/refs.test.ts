@@ -6,7 +6,7 @@ test('refs lists every reference site except the declaration, marking writes', a
   const { items, receipt } = await ast.refs('greet');
   assert.deepEqual(
     items.map((r) => `${r.path}:${r.start.line}:${r.start.col}${r.write ? ' w' : ''}`),
-    ['src/app.ts:1:10', 'src/app.ts:8:39', 'src/app.ts:15:10', 'src/app.ts:15:19', 'src/greet.ts:6:48', 'src/greet.ts:13:26'],
+    ['src/app.ts:1:10', 'src/app.ts:8:39', 'src/app.ts:19:10', 'src/app.ts:19:19', 'src/greet.ts:6:48', 'src/greet.ts:13:26'],
   );
   assert.equal(receipt.engine, 'ts-morph');
 

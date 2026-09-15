@@ -8,6 +8,7 @@ export interface ReceiptInput {
   filesScanned: number;
   startedAt: number;
   limit?: number | null;
+  unresolved?: number;
 }
 
 /** Apply `limit`, count matched files, and stamp the receipt. */
@@ -26,11 +27,13 @@ export function finish<T extends { path: string }>(input: ReceiptInput, all: T[]
     limit,
     engine: input.engine,
     elapsed_ms: Math.round(performance.now() - input.startedAt),
+    unresolved: input.unresolved ?? 0,
   };
   return { items, receipt };
 }
 
 export function formatReceipt(r: Receipt): string {
   const cut = r.truncated ? `, truncated at ${r.limit}` : '';
-  return `ast: ${r.items} items in ${r.files_matched} files (scanned ${r.files_scanned}, ${r.engine}, ${(r.elapsed_ms / 1000).toFixed(1)}s${cut})`;
+  const unresolved = r.unresolved > 0 ? `, ${r.unresolved} unresolved` : '';
+  return `ast: ${r.items} items in ${r.files_matched} files (scanned ${r.files_scanned}, ${r.engine}, ${(r.elapsed_ms / 1000).toFixed(1)}s${cut}${unresolved})`;
 }

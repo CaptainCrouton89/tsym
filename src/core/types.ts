@@ -36,7 +36,7 @@ export const SYMBOL_KINDS: readonly SymbolKind[] = [
 
 /** A declaration. `text` is its first source line, trimmed. */
 export interface Symbol extends Loc {
-  kind: SymbolKind;
+  kind: SymbolKind | 'module' | 'export';
   name: string;
   /** `Outer.member` for members, else the same as `name`. */
   qualifiedName: string;
@@ -74,6 +74,53 @@ export interface Caller extends Loc {
   text: string;
 }
 
+/** One function or method called by the symbol. The loc is the callee's declaration. */
+export interface Callee extends Loc {
+  kind: SymbolKind;
+  name: string;
+  qualifiedName: string;
+  /** 1 for a direct callee; larger for transitive callees from `trace`. */
+  depth: number;
+  callSites: number;
+  text: string;
+}
+
+export interface GraphNode {
+  /** `path:line:col` of the declaration — a valid ast symbol address. */
+  id: string;
+  path: string;
+  start: Pos;
+  end: Pos;
+  kind: Symbol['kind'];
+  name: string;
+  qualifiedName: string;
+  /** 0 for a seed. */
+  depth: number;
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  callSites: number;
+}
+
+/** A call site the traversal saw but could not follow. */
+export interface UnresolvedEdge {
+  from: string;
+  /** Callee text as written at the call site. */
+  name: string;
+  reason: 'dispatch' | 'dynamic' | 'external';
+  path: string;
+  start: Pos;
+  text: string;
+}
+
+export interface Graph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  unresolved: UnresolvedEdge[];
+}
+
 export type Engine = 'ast-grep' | 'ts-morph';
 
 export interface Receipt {
@@ -87,9 +134,13 @@ export interface Receipt {
   limit: number | null;
   engine: Engine;
   elapsed_ms: number;
+  /** Call sites seen but not followed (external + dispatch + dynamic). */
+  unresolved: number;
 }
 
 export interface Result<T> {
   items: T[];
   receipt: Receipt;
+  /** Present only on traversal results. */
+  graph?: Graph;
 }
