@@ -1,0 +1,28 @@
+{
+  "name": "ast",
+  "version": "0.1.0",
+  "description": "Symbol-level reading of a codebase for agents: outline, find, show, search, refs, callers, impact.",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "ast": "./bin/ast.js" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "files": ["bin", "dist"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx test/*.test.ts",
+    "dev": "tsx src/cli.ts"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@ast-grep/napi": "^0.45.3",
+    "ts-morph": "^28.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
