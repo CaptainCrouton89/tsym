@@ -52,16 +52,27 @@ test('module graph nodes use an address that cannot collide with a declaration',
   const root = mkdtempSync(path.join(os.tmpdir(), 'ast-module-node-'));
   try {
     writeFileSync(path.join(root, 'tsconfig.json'), '{"compilerOptions": {"strict": true}}');
-    writeFileSync(path.join(root, 'a.ts'), 'export function target(): void {}\ntarget();\n');
+    const source = "export function reviveNode(): number { return 1; }\nreviveNode();\n[1].forEach(() => {\n  const boot = async (id: string): Promise<number> => {\n    return reviveNode();\n  };\n  const prior = 0, next = () => reviveNode();\n  void prior;\n  void boot('id');\n  next();\n});\n";
+    writeFileSync(path.join(root, 'a.ts'), source);
     const project = openWorkspace(root);
-    const result = await project.impact('target');
+    const result = await project.impact('reviveNode');
     const module = result.graph!.nodes.find((node) => node.kind === 'module');
     assert.equal(module?.id, 'a.ts:0:0');
     assert.ok(result.graph!.edges.some((edge) => edge.from === module?.id));
     assert.ok(!result.graph!.edges.some((edge) => edge.from === edge.to));
     const shown = await project.show(module!.id);
     assert.equal(shown.items[0]!.symbol.kind, 'module');
-    assert.equal(shown.items[0]!.source, 'export function target(): void {}\ntarget();\n');
+    assert.equal(shown.items[0]!.source, source);
+    assert.deepEqual(project.outline('a.ts').items.map((item) => item.name), ['reviveNode']);
+    const next = result.graph!.nodes.find((node) => node.name === 'next');
+    assert.equal(next?.id, 'a.ts:7:20');
+    assert.equal((await project.show(next!.id)).items[0]!.symbol.name, 'next');
+    assert.deepEqual((await project.calls(next!.id)).items.map((item) => item.name), ['reviveNode']);
+    const boot = result.graph!.nodes.find((node) => node.name === 'boot');
+    assert.equal(boot?.id, 'a.ts:4:3');
+    assert.match((await project.show(boot!.id)).items[0]!.source, /const boot = async/);
+    assert.deepEqual((await project.calls(boot!.id)).items.map((item) => item.name), ['reviveNode']);
+    assert.deepEqual((await project.trace(boot!.id)).items.map((item) => item.name), ['reviveNode']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

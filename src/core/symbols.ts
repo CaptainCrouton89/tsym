@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
-import { Node } from 'ts-morph';
+import { Node, SyntaxKind, type VariableDeclaration } from 'ts-morph';
 import { find } from './find.js';
-import { outline } from './outline.js';
 import { locOf, sourceFileFor } from './ts-program.js';
 import type { Symbol } from './types.js';
 import type { Workspace } from './workspace.js';
@@ -60,14 +59,8 @@ export function uniqueSymbols<T extends { path: string; start: { line: number; c
 export async function resolveSymbol(ws: Workspace, raw: string, opts: ResolveOptions = {}): Promise<Symbol> {
   const address = parseAddress(ws, raw);
   if (address.kind === 'position') {
-    const synthetic = syntheticSymbolAt(ws, address.path, address.line, address.col);
-    if (synthetic) return synthetic;
-    const syms = outline(ws, address.path).items;
-    const atName = syms.filter((s) => s.namePos.line === address.line && (address.col === null || (address.col >= s.namePos.col && address.col <= s.namePos.col + s.name.length)));
-    if (atName.length > 0) return atName[0]!;
-    // Innermost declaration whose range contains the line.
-    const containing = syms.filter((s) => s.start.line <= address.line && address.line <= s.end.line);
-    if (containing.length > 0) return containing.reduce((best, s) => (s.end.line - s.start.line < best.end.line - best.start.line ? s : best));
+    const symbol = declarationAt(ws, address.path, address.line, address.col);
+    if (symbol) return symbol;
     throw new SymbolNotFound(raw);
   }
   const inFile = opts.path ? ws.rel(ws.abs(opts.path)) : undefined;
@@ -80,20 +73,91 @@ export async function resolveSymbol(ws: Workspace, raw: string, opts: ResolveOpt
   throw new AmbiguousSymbol(raw, found);
 }
 
-/** Module and re-export graph nodes do not appear in `outline`, but their graph addresses remain usable. */
-function syntheticSymbolAt(ws: Workspace, path: string, line: number, col: number | null): Symbol | null {
+/** Resolve a position against its TypeScript declaration rather than the file-level outline. */
+function declarationAt(ws: Workspace, path: string, line: number, col: number | null): Symbol | null {
   const source = sourceFileFor(ws, path);
   if (line === 0) {
     const loc = locOf(ws, source);
     return { ...loc, start: { line: 0, col: 0 }, kind: 'module', name: path.split('/').pop() ?? path, qualifiedName: path, exported: false, text: '(module scope)', namePos: loc.start };
   }
-  if (col === null) return null;
-  const pos = source.compilerNode.getPositionOfLineAndCharacter(line - 1, col - 1);
-  let node = source.getDescendantAtPos(pos);
-  while (node && !Node.isExportDeclaration(node)) node = node.getParent();
-  if (!node) return null;
-  const specifier = node.getNamedExports()[0];
-  const name = specifier?.getAliasNode()?.getText() ?? specifier?.getName() ?? 'export';
+  const lineStarts = source.compilerNode.getLineStarts();
+  const column = col ?? 1;
+  if (!Number.isSafeInteger(line) || !Number.isSafeInteger(column) || line < 1 || line > lineStarts.length || column < 1) return null;
+  const position = lineStarts[line - 1]! + column - 1;
+  const nextLine = line < lineStarts.length ? lineStarts[line]! : source.getFullText().length + 1;
+  if (position >= nextLine) return null;
+  let node = source.getDescendantAtPos(position);
+  while (node) {
+    const symbol = symbolForDeclaration(ws, node);
+    if (symbol) return symbol;
+    node = node.getParent();
+  }
+  return null;
+}
+
+function symbolForDeclaration(ws: Workspace, node: Node): Symbol | null {
+  if (Node.isExportDeclaration(node)) {
+    const specifier = node.getNamedExports()[0];
+    const name = specifier?.getAliasNode()?.getText() ?? specifier?.getName() ?? 'export';
+    return { ...namedSymbol(ws, node, 'export', name, undefined), exported: true };
+  }
+  if (Node.isVariableStatement(node)) {
+    const declaration = node.getDeclarations()[0];
+    return declaration ? variableSymbol(ws, declaration, node) : null;
+  }
+  if (Node.isVariableDeclaration(node)) {
+    const statement = node.getVariableStatement();
+    return variableSymbol(ws, node, statement?.getDeclarations().length === 1 ? statement : node);
+  }
+  if (Node.isFunctionDeclaration(node)) return namedSymbol(ws, node, 'function', node.getName() ?? 'default', node.getNameNode() ?? undefined);
+  if (Node.isClassDeclaration(node) || Node.isClassExpression(node)) return namedSymbol(ws, node, 'class', node.getName() ?? 'default', node.getNameNode() ?? undefined);
+  if (Node.isInterfaceDeclaration(node)) return namedSymbol(ws, node, 'interface', node.getName(), node.getNameNode());
+  if (Node.isTypeAliasDeclaration(node)) return namedSymbol(ws, node, 'type', node.getName(), node.getNameNode());
+  if (Node.isEnumDeclaration(node)) return namedSymbol(ws, node, 'enum', node.getName(), node.getNameNode());
+  if (Node.isModuleDeclaration(node)) return namedSymbol(ws, node, 'namespace', node.getName(), node.getNameNode());
+  if (Node.isMethodDeclaration(node) || Node.isGetAccessorDeclaration(node) || Node.isSetAccessorDeclaration(node)) return namedSymbol(ws, node, 'method', node.getName(), node.getNameNode(), qualifiedName(node, node.getName()));
+  if (Node.isPropertyDeclaration(node) || Node.isPropertySignature(node)) return namedSymbol(ws, node, 'property', node.getName(), node.getNameNode(), qualifiedName(node, node.getName()));
+  if (Node.isMethodSignature(node)) return namedSymbol(ws, node, 'method', node.getName(), node.getNameNode(), qualifiedName(node, node.getName()));
+  if (Node.isEnumMember(node)) return namedSymbol(ws, node, 'property', node.getName(), node.getNameNode(), qualifiedName(node, node.getName()));
+  if (Node.isConstructorDeclaration(node)) {
+    const owner = node.getParent();
+    const nameNode = Node.isClassDeclaration(owner) || Node.isClassExpression(owner) ? owner.getNameNode() ?? undefined : undefined;
+    return namedSymbol(ws, node, 'method', 'constructor', nameNode, qualifiedName(node, 'constructor'));
+  }
+  if (Node.isPropertyAssignment(node)) {
+    const initializer = node.getInitializer();
+    if (initializer && isFunctionLike(initializer)) return namedSymbol(ws, node, 'function', node.getName(), node.getNameNode(), qualifiedName(node, node.getName()));
+  }
+  return null;
+}
+
+function variableSymbol(ws: Workspace, declaration: VariableDeclaration, range: Node): Symbol {
+  const initializer = declaration.getInitializer();
+  return namedSymbol(ws, range, initializer && isFunctionLike(initializer) ? 'function' : 'var', declaration.getName(), declaration.getNameNode());
+}
+
+function isFunctionLike(node: Node): boolean {
+  return Node.isArrowFunction(node) || Node.isFunctionExpression(node) || Node.isFunctionDeclaration(node) || Node.isMethodDeclaration(node) || Node.isConstructorDeclaration(node) || Node.isGetAccessorDeclaration(node) || Node.isSetAccessorDeclaration(node);
+}
+
+function namedSymbol(ws: Workspace, node: Node, kind: Symbol['kind'], name: string, nameNode: Node | undefined, qualified = qualifiedName(node, name)): Symbol {
   const loc = locOf(ws, node);
-  return { ...loc, kind: 'export', name, qualifiedName: name, exported: true, text: node.getText().split('\n')[0]!.trim(), namePos: loc.start };
+  return { ...loc, kind, name, qualifiedName: qualified, exported: hasExportKeyword(node), text: node.getText().split('\n')[0]!.trim(), namePos: nameNode ? locOf(ws, nameNode).start : loc.start };
+}
+
+function hasExportKeyword(node: Node): boolean {
+  return Node.isModifierable(node) && node.hasModifier(SyntaxKind.ExportKeyword);
+}
+
+function qualifiedName(node: Node, name: string): string {
+  const scopes: string[] = [];
+  for (let owner = node.getParent(); owner; owner = owner.getParent()) {
+    if (Node.isClassDeclaration(owner) || Node.isClassExpression(owner) || Node.isInterfaceDeclaration(owner) || Node.isEnumDeclaration(owner) || Node.isModuleDeclaration(owner)) {
+      scopes.unshift(owner.getName() ?? '(class)');
+    } else if (Node.isObjectLiteralExpression(owner)) {
+      const holder = owner.getParent();
+      if (Node.isVariableDeclaration(holder)) scopes.unshift(holder.getName());
+    }
+  }
+  return [...scopes, name].join('.');
 }

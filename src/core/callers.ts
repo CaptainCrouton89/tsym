@@ -90,7 +90,10 @@ function enclosingCaller(ws: Workspace, site: Node, depth: number): Caller & { i
 /** The statement or member that declares a function-like node: `const f = () => …` reports the whole `const` statement. */
 function declarationOf(fn: Node): Node {
   const p = fn.getParent();
-  if (p && Node.isVariableDeclaration(p)) return p.getVariableStatement() ?? p;
+  if (p && Node.isVariableDeclaration(p)) {
+    const statement = p.getVariableStatement();
+    return statement && statement.getDeclarations().length === 1 ? statement : p;
+  }
   if (p && (Node.isPropertyAssignment(p) || Node.isPropertyDeclaration(p))) return p;
   return fn;
 }
