@@ -13,6 +13,7 @@ export type { Caller, Engine, Excerpt, Loc, Match, Pos, Receipt, Ref, Result, Sy
 export type { CallersOptions, FindOptions, ImpactOptions, RefsOptions, ResolveOptions, SearchOptions, Workspace };
 export { AmbiguousSymbol, SymbolNotFound, formatAddress } from './core/symbols.js';
 export { formatReceipt } from './core/receipt.js';
+export { NoProject } from './core/workspace.js';
 export { SYMBOL_KINDS } from './core/types.js';
 
 /** The seven read operations over one workspace. ts-morph's program is built on the first refs/callers/impact call and kept. */

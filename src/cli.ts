@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util';
 import { formatReceipt } from './core/receipt.js';
 import { AmbiguousSymbol, SymbolNotFound } from './core/symbols.js';
 import { SYMBOL_KINDS, type Caller, type Excerpt, type Loc, type Match, type Receipt, type Ref, type Result, type Symbol, type SymbolKind } from './core/types.js';
+import { NoProject } from './core/workspace.js';
 import { openWorkspace } from './index.js';
 
 const USAGE = `ast — symbol-level reading of a codebase (TypeScript/JavaScript)
@@ -174,7 +175,7 @@ function usageError(msg: string): number {
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (err: unknown) => {
-    if (err instanceof AmbiguousSymbol || err instanceof SymbolNotFound) {
+    if (err instanceof AmbiguousSymbol || err instanceof SymbolNotFound || err instanceof NoProject) {
       process.stderr.write(`ast: ${err.message}\n`);
       process.exit(2);
     }

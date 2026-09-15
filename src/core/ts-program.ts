@@ -6,7 +6,7 @@ import type { Workspace } from './workspace.js';
 
 /** The ts-morph source file for a workspace-relative path, adding it to the program if the tsconfig excluded it. */
 export function sourceFileFor(ws: Workspace, rel: string): SourceFile {
-  const project = ws.project();
+  const project = ws.projectFor(rel);
   const abs = ws.abs(rel);
   return project.getSourceFile(abs) ?? project.addSourceFileAtPath(abs);
 }

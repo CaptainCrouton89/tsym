@@ -16,7 +16,7 @@ export async function callers(ws: Workspace, address: string, opts: CallersOptio
   const symbol = await resolveSymbol(ws, address, opts);
   const id = nameIdentifier(ws, symbol);
   const items = callersOf(ws, id, 1);
-  return finish({ command: 'callers', query: address, root: ws.root, engine: 'ts-morph', filesScanned: ws.project().getSourceFiles().length, startedAt, limit: opts.limit }, items);
+  return finish({ command: 'callers', query: address, root: ws.root, engine: 'ts-morph', filesScanned: ws.projectFor(symbol.path).getSourceFiles().length, startedAt, limit: opts.limit }, items);
 }
 
 /** Direct callers of the declaration named by `id`, each carrying the identifier that names it (for recursion). */

@@ -7,15 +7,22 @@ import { Project } from 'ts-morph';
 const SOURCE_EXT = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.git', 'coverage']);
 
+/** refs/callers/impact were asked for a file with no TypeScript project around it. */
+export class NoProject extends Error {}
+
 export class Workspace {
   readonly root: string;
+  /** The tsconfig.json at the root, when the root was chosen because of one. */
   readonly tsconfig: string | null;
+  /** Which marker chose the root; `none` means `dir` itself was used because nothing above it is a project. */
+  readonly marker: 'tsconfig.json' | 'package.json' | '.git' | 'none';
   private fileList: string[] | null = null;
-  private tsProject: Project | null = null;
+  private projects = new Map<string, Project>();
 
-  constructor(root: string, tsconfig: string | null) {
+  constructor(root: string, tsconfig: string | null, marker: Workspace['marker']) {
     this.root = root;
     this.tsconfig = tsconfig;
+    this.marker = marker;
   }
 
   /** Path relative to the root, `/`-separated. */
@@ -45,16 +52,28 @@ export class Workspace {
     return this.fileList.filter((f) => matchesGlob(f, glob));
   }
 
-  /** ts-morph program over the workspace. Built on first use; kept for the life of this object. */
-  project(): Project {
-    if (this.tsProject) return this.tsProject;
-    if (this.tsconfig) {
-      this.tsProject = new Project({ tsConfigFilePath: this.tsconfig, skipFileDependencyResolution: true });
+  /**
+   * ts-morph program for the file at `rel`: the nearest tsconfig.json above the file (so a file in a nested
+   * repo gets that repo's program, not one over every file under the root). Without a tsconfig, a root chosen
+   * by package.json or .git loads the workspace's own files; a bare directory refuses instead of loading
+   * everything under it. Built on first use per tsconfig; kept for the life of this object.
+   */
+  projectFor(rel: string): Project {
+    const tsconfig = nearestTsconfig(path.dirname(this.abs(rel))) ?? this.tsconfig;
+    const key = tsconfig ?? this.root;
+    const cached = this.projects.get(key);
+    if (cached) return cached;
+    let project: Project;
+    if (tsconfig) {
+      project = new Project({ tsConfigFilePath: tsconfig, skipFileDependencyResolution: true });
+    } else if (this.marker !== 'none') {
+      project = new Project({ skipFileDependencyResolution: true, compilerOptions: { allowJs: true } });
+      project.addSourceFilesAtPaths(this.files().map((f) => this.abs(f)));
     } else {
-      this.tsProject = new Project({ skipFileDependencyResolution: true, compilerOptions: { allowJs: true } });
-      this.tsProject.addSourceFilesAtPaths(this.files().map((f) => this.abs(f)));
+      throw new NoProject(`no tsconfig.json above ${rel} and ${this.root} is not a project (no package.json or .git); refs/callers/impact need a TypeScript project — run from inside one or pass --cwd`);
     }
-    return this.tsProject;
+    this.projects.set(key, project);
+    return project;
   }
 }
 
@@ -64,24 +83,32 @@ export class Workspace {
  */
 export function openWorkspace(dir: string = process.cwd()): Workspace {
   const start = path.resolve(dir);
-  for (const marker of ['tsconfig.json', 'package.json', '.git']) {
+  for (const marker of ['tsconfig.json', 'package.json', '.git'] as const) {
     let cur = start;
     for (;;) {
       const candidate = path.join(cur, marker);
       if (existsSync(candidate)) {
-        return new Workspace(cur, marker === 'tsconfig.json' ? candidate : findTsconfig(cur));
+        return new Workspace(cur, marker === 'tsconfig.json' ? candidate : nearestTsconfig(cur, cur), marker);
       }
       const parent = path.dirname(cur);
       if (parent === cur) break;
       cur = parent;
     }
   }
-  return new Workspace(start, null);
+  return new Workspace(start, null, 'none');
 }
 
-function findTsconfig(root: string): string | null {
-  const p = path.join(root, 'tsconfig.json');
-  return existsSync(p) ? p : null;
+/** Nearest tsconfig.json at or above `dir`, not climbing past `stopAt` when given. */
+function nearestTsconfig(dir: string, stopAt?: string): string | null {
+  let cur = dir;
+  for (;;) {
+    const p = path.join(cur, 'tsconfig.json');
+    if (existsSync(p)) return p;
+    if (cur === stopAt) return null;
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
 }
 
 export function langFor(file: string): Lang | null {

@@ -21,5 +21,5 @@ export async function refs(ws: Workspace, address: string, opts: RefsOptions = {
     return { ...locOf(ws, node), text: lineTextAt(node), write: ref.isWriteAccess() && !isImport };
   });
   items.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.start.line - b.start.line || a.start.col - b.start.col));
-  return finish({ command: 'refs', query: address, root: ws.root, engine: 'ts-morph', filesScanned: ws.project().getSourceFiles().length, startedAt, limit: opts.limit }, items);
+  return finish({ command: 'refs', query: address, root: ws.root, engine: 'ts-morph', filesScanned: ws.projectFor(symbol.path).getSourceFiles().length, startedAt, limit: opts.limit }, items);
 }

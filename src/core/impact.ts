@@ -53,7 +53,7 @@ export async function impact(ws: Workspace, address: string, opts: ImpactOptions
   }
 
   items.sort((a, b) => a.depth - b.depth || (a.path < b.path ? -1 : a.path > b.path ? 1 : a.start.line - b.start.line));
-  return finish({ command: 'impact', query: address, root: ws.root, engine: 'ts-morph', filesScanned: ws.project().getSourceFiles().length, startedAt, limit: opts.limit }, items);
+  return finish({ command: 'impact', query: address, root: ws.root, engine: 'ts-morph', filesScanned: ws.projectFor(symbol.path).getSourceFiles().length, startedAt, limit: opts.limit }, items);
 }
 
 function key(loc: { path: string; start: { line: number; col: number } }): string {
