@@ -28,3 +28,11 @@ test('calls lists direct workspace callees and counts calls it cannot follow', a
   const multiple = await ast.calls(['run', 'shout']);
   assert.equal(multiple.items.filter((callee) => callee.qualifiedName === 'greet')[0]!.callSites, 2);
 });
+
+test('calls counts every unresolved call site in a chain, matching trace at depth 1', async () => {
+  const chained = await ast.calls('chained');
+  assert.equal(chained.items.length, 0);
+  assert.equal(chained.receipt.unresolved, 2);
+  const traced = await ast.trace('chained', { depth: 1 });
+  assert.equal(traced.receipt.unresolved, chained.receipt.unresolved);
+});

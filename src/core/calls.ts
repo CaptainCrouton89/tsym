@@ -15,10 +15,10 @@ export async function calls(ws: Workspace, addresses: string | readonly string[]
   const inputs = asAddresses(addresses);
   const symbols = uniqueSymbols(await Promise.all(inputs.map((address) => resolveSymbol(ws, address, opts))));
   const byKey = new Map<string, Callee>();
-  const unresolved = new Set<string>();
+  let unresolved = 0;
   for (const symbol of symbols) {
     const result = calleesOf(ws, declarationForSymbol(ws, symbol), 1);
-    for (const edge of result.unresolved) unresolved.add(`${edge.from}:${edge.start.line}:${edge.start.col}`);
+    unresolved += result.unresolved.length;
     for (const { declaration: _declaration, callable: _callable, ...callee } of result.items) {
       const existing = byKey.get(key(callee));
       if (existing) existing.callSites += callee.callSites;
@@ -26,7 +26,7 @@ export async function calls(ws: Workspace, addresses: string | readonly string[]
     }
   }
   const items = [...byKey.values()].sort(compareCallees);
-  return finish({ command: 'calls', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit, unresolved: unresolved.size, ...opts }, items);
+  return finish({ command: 'calls', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit, unresolved, ...opts }, items);
 }
 
 function key(loc: { path: string; start: { line: number; col: number } }): string {

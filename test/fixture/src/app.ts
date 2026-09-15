@@ -43,3 +43,7 @@ export function useBoth(): void {
   first();
   second();
 }
+
+export function chained(text: string): string[] {
+  return text.trim().split(' ');
+}
