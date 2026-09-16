@@ -20,10 +20,11 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --test --import tsx test/*.test.ts",
-    "dev": "tsx src/cli.ts"
+    "dev": "tsx src/cli.ts",
+    "validate:crouter": "tsx scripts/validate-crouter.ts"
   },
   "engines": {
     "node": ">=22.13"

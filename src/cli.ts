@@ -2,7 +2,7 @@ import { renderHelp } from './commands/help.js';
 import { localSearch } from './commands/handlers/search.js';
 import { applyRenamePlan, type RenameAnswer } from './commands/rename-apply.js';
 import { parseInvocation } from './commands/tree.js';
-import type { Answer, Completion, Invocation } from './commands/types.js';
+import type { Answer, Completion, Invocation, OutputNode } from './commands/types.js';
 import { renderCompletion, renderNode } from './output.js';
 import { invokeResident, serverReload, serverStatus, serverStop } from './server/client.js';
 
@@ -34,9 +34,8 @@ async function applyRename(invocation: Invocation): Promise<Completion> {
   if (invocation.input.flags['--apply'] !== true || !isRenameAnswer(completion)) return completion;
   const applied = await applyRenamePlan(completion.renamePlan);
   if ('category' in applied) return applied;
-  const data = Array.isArray(completion.data) ? completion.data : [completion.data];
-  const [rename, ...rest] = data;
-  return { ...completion, data: [{ ...rename!, attributes: { ...rename!.attributes, applied: true } }, ...rest] };
+  const stamp = (node: OutputNode): OutputNode => ({ ...node, attributes: { ...node.attributes, applied: true } });
+  return { ...completion, data: Array.isArray(completion.data) ? [stamp(completion.data[0]!), ...completion.data.slice(1)] : stamp(completion.data) };
 }
 
 function isRenameAnswer(completion: Completion): completion is Answer & RenameAnswer { return !('category' in completion) && 'renamePlan' in completion; }
