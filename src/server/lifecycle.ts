@@ -4,7 +4,7 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 
 export interface ServerPaths { root: string; state: string; lock: string; port: string; pid: string; log: string; store: string; results: string; }
-export interface PublishedState { root: string; pid: number; bootedAt: string; port: string; log: string; idleDeadline: string; state: 'ready' | 'stopping'; }
+export interface PublishedState { root: string; pid: number; bootedAt: string; port: string; log: string; idleDeadline: string; state: 'ready' | 'stopping'; index?: 'current' | 'stale'; declarations?: number; }
 
 export function discoverRoot(input: string | undefined, cwd = process.cwd()): string {
   let current = path.resolve(input ?? cwd);

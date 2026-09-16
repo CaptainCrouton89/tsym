@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 
 function run(...args: string[]) {
   return spawnSync(process.execPath, ['dist/cli.js', ...args], { cwd: process.cwd(), encoding: 'utf8' });
+}
+
+function runAt(root: string, cache: string, ...args: string[]) {
+  return spawnSync(process.execPath, ['dist/cli.js', '--root', root, ...args], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } });
 }
 
 test('CLI renders declaration-driven help and complete schema failures with one receipt', () => {
@@ -30,4 +38,23 @@ test('CLI renders declaration-driven help and complete schema failures with one 
   const renamedFlag = run('inspect', 'thing', '--limit', '5');
   assert.equal(renamedFlag.status, 2);
   assert.match(renamedFlag.stdout, /--each N/);
+});
+
+test('CLI help reads the published index state without a resident socket', () => {
+  const cache = mkdtempSync(path.join(tmpdir(), 'tsym-help-'));
+  const root = path.resolve('test/fixture');
+  const state = path.join(cache, 'tsym', createHash('sha256').update(root).digest('hex').slice(0, 16));
+  try {
+    mkdirSync(path.join(state, 'store'), { recursive: true });
+    writeFileSync(path.join(state, 'pid'), JSON.stringify({ root, pid: 1, bootedAt: '2026-01-01T00:00:00.000Z', port: path.join(state, 'port'), log: path.join(state, 'log'), idleDeadline: '2026-01-01T00:15:00.000Z', state: 'ready', index: 'stale', declarations: 42 }));
+    writeFileSync(path.join(state, 'store', 'meta.json'), JSON.stringify({ indexedCommit: 'abc123', indexDurationMs: 9 }));
+    const help = runAt(root, cache, 'find', '-h');
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /<server root="[^"]+" state="ready" indexedCommit="abc123" indexDuration="9ms" index="stale" declarations="42"\/>/);
+    const queryHelp = runAt(root, cache, 'query', '-h');
+    assert.equal(queryHelp.status, 0, queryHelp.stderr);
+    assert.match(queryHelp.stdout, /<server root="[^"]+" state="ready" indexedCommit="abc123" indexDuration="9ms" index="stale" declarations="42"\/>/);
+  } finally {
+    rmSync(cache, { recursive: true, force: true });
+  }
 });

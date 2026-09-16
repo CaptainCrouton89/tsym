@@ -140,6 +140,69 @@ test('a file created under a previously empty directory reaches the refresh batc
   }
 });
 
+test('a file deleted during its creation refresh schedules another full refresh', async () => {
+  const { root, cleanup } = fixture();
+  const program = new Ts7Host(root);
+  const projects = new ConfiguredProjects(root, program);
+  const previous = process.env.TSYM_DEBOUNCE_MS;
+  process.env.TSYM_DEBOUNCE_MS = '20';
+  const transient = path.join(root, 'src', 'transient.ts');
+  const batches: WatchBatch[] = [];
+  let release = () => {};
+  let firstStarted = () => {};
+  let secondStarted = () => {};
+  const first = new Promise<void>((resolve) => { firstStarted = resolve; });
+  const second = new Promise<void>((resolve) => { secondStarted = resolve; });
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    projects.load();
+    const watcher = watchIndex(root, projects, async (batch) => {
+      batches.push(batch);
+      if (batches.length === 1) { firstStarted(); await blocked; }
+      else secondStarted();
+    }, (error) => { throw error; }, () => {});
+    try {
+      writeFileSync(transient, 'export const transient = true;\n');
+      await first;
+      rmSync(transient);
+      release();
+      await Promise.race([second, new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`batches: ${JSON.stringify(batches)}`)), 5_000).unref())]);
+    } finally { watcher.close(); }
+    assert.ok(batches[1]?.full);
+    assert.ok('deleted' in batches[1]!.fileChanges && batches[1]!.fileChanges.deleted?.includes(transient));
+  } finally {
+    if (previous === undefined) delete process.env.TSYM_DEBOUNCE_MS; else process.env.TSYM_DEBOUNCE_MS = previous;
+    program.close();
+    cleanup();
+  }
+});
+
+test('removing an empty directory invalidates the index', async () => {
+  const { root, cleanup } = fixture();
+  const program = new Ts7Host(root);
+  const projects = new ConfiguredProjects(root, program);
+  const previous = process.env.TSYM_DEBOUNCE_MS;
+  process.env.TSYM_DEBOUNCE_MS = '20';
+  const empty = path.join(root, 'src', 'empty');
+  const batches: WatchBatch[] = [];
+  let seen = () => {};
+  const arrived = new Promise<void>((resolve) => { seen = resolve; });
+  try {
+    mkdirSync(empty);
+    projects.load();
+    const watcher = watchIndex(root, projects, async (batch) => { batches.push(batch); if ('invalidateAll' in batch.fileChanges) seen(); }, (error) => { throw error; }, () => {});
+    try {
+      rmSync(empty, { recursive: true });
+      await Promise.race([arrived, new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`batches: ${JSON.stringify(batches)}`)), 5_000).unref())]);
+    } finally { watcher.close(); }
+    assert.ok(batches.some((batch) => 'invalidateAll' in batch.fileChanges && batch.full));
+  } finally {
+    if (previous === undefined) delete process.env.TSYM_DEBOUNCE_MS; else process.env.TSYM_DEBOUNCE_MS = previous;
+    program.close();
+    cleanup();
+  }
+});
+
 test('deleting one of several configs keeps later refreshes working', () => {
   const { root, write, cleanup } = fixture();
   const nested = path.join(root, 'src', 'api', 'tsconfig.json');

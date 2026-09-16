@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, statSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
-import { discoverDirectories, type ConfiguredProjects } from '../ts7/projects.js';
+import { discoverDirectories, skippedDirectories, type ConfiguredProjects } from '../ts7/projects.js';
 
 export interface WatchBatch {
   fileChanges: { changed?: string[]; created?: string[]; deleted?: string[] } | { invalidateAll: true };
@@ -19,7 +19,8 @@ type FileEvent = 'changed' | 'created' | 'deleted';
 /** Watches configured source directories; events supply text changes, never semantic invalidation. */
 export function watchIndex(root: string, projects: ConfiguredProjects, refresh: (batch: WatchBatch) => Promise<void>, reportError: (error: unknown) => void, markStale: (flush: () => Promise<void>) => void): IndexWatcher {
   let knownFiles = new Set<string>();
-  let watchers: FSWatcher[] = [];
+  let knownDirectories = new Set<string>();
+  let rootWatcher: FSWatcher | undefined;
   let gitWatcher: { close(): void } | undefined;
   let timer: NodeJS.Timeout | undefined;
   let firstEventAt: number | undefined;
@@ -31,31 +32,31 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
   const debounceMs = configuredDebounceMs();
 
   const resetDirectories = () => {
-    for (const watcher of watchers) watcher.close();
     gitWatcher?.close();
     const sourceFiles = projects.records().flatMap((project) => [...project.files]);
     const configs = projects.records().map((project) => project.config);
     // Configs are known files: rewriting one is a change, and calling it a creation leaves TypeScript on the stale config.
     knownFiles = new Set([...sourceFiles, ...configs]);
-    // Every workspace directory is watched, not only those holding a known file: fs.watch is not recursive, so a
-    // directory that is empty today reports nothing when the first file appears in it.
-    watchers = discoverDirectories(root).map((directory) => watch(directory, (_event, name) => {
-      if (name === null) { invalidate(); return; }
-      const file = path.resolve(directory, name.toString());
-      const relative = path.relative(root, file);
-      if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return;
-      // fs.watch reports renames for a directory move and does not enumerate every moved child.
-      if (isDirectory(file) || [...knownFiles].some((known) => known.startsWith(`${file}${path.sep}`))) { invalidate(); return; }
-      const configuration = path.basename(file) === 'tsconfig.json' || path.basename(file) === 'package.json';
-      const known = knownFiles.has(file);
-      // A membership change needs the full path, which resets knownFiles from the reloaded project records.
-      if (existsSync(file)) record(file, known ? 'changed' : 'created', configuration || !known);
-      else record(file, 'deleted', configuration || known);
-    }));
+    knownDirectories = new Set(discoverDirectories(root));
     gitWatcher = watchGit(root, () => { git = true; invalidate(); });
   };
 
+  const onRootEvent = (_event: string, name: string | Buffer | null) => {
+    if (name === null) { invalidate(); return; }
+    const file = path.resolve(root, name.toString());
+    const relative = path.relative(root, file);
+    if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || relative.split(path.sep).some((part) => skippedDirectories.has(part))) return;
+    // fs.watch reports renames for a directory move and does not enumerate every moved child.
+    if (isDirectory(file) || knownDirectories.has(file) || [...knownFiles].some((known) => known.startsWith(`${file}${path.sep}`))) { invalidate(); return; }
+    const configuration = path.basename(file) === 'tsconfig.json' || path.basename(file) === 'package.json';
+    const known = knownFiles.has(file);
+    // A membership change needs the full path, which resets knownFiles from the reloaded project records.
+    if (existsSync(file)) record(file, known ? 'changed' : 'created', configuration || !known);
+    else record(file, 'deleted', configuration || known);
+  };
+
   function record(file: string, event: FileEvent, requiresFull: boolean): void {
+    if (event === 'created') knownFiles.add(file);
     events.set(file, event);
     schedule(requiresFull);
   }
@@ -102,10 +103,11 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
   }
 
   resetDirectories();
+  rootWatcher = watch(root, { recursive: true }, onRootEvent);
   return {
     close() {
       if (timer) clearTimeout(timer);
-      for (const watcher of watchers) watcher.close();
+      rootWatcher?.close();
       gitWatcher?.close();
     },
     refresh: resetDirectories,

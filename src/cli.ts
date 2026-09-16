@@ -5,11 +5,13 @@ import { parseInvocation } from './commands/tree.js';
 import type { Answer, Completion, Invocation, OutputNode } from './commands/types.js';
 import { renderCompletion, renderNode } from './output.js';
 import { invokeResident, serverReload, serverStatus, serverStop } from './server/client.js';
+import { discoverRoot, pathsForRoot, readState } from './server/lifecycle.js';
+import { readMetadata } from './store/meta.js';
 
 async function main(argv: string[]): Promise<number> {
   const parsed = parseInvocation(argv);
   if ('help' in parsed) {
-    const state = parsed.help.name === 'search' ? '' : await helpState(rootFlag(argv));
+    const state = parsed.help.name === 'search' ? '' : helpState(rootFlag(argv));
     process.stdout.write(renderHelp(parsed.help, state) + '\n');
     process.stderr.write('1 answer, 0 ms\n');
     return 0;
@@ -54,12 +56,13 @@ async function applyRename(invocation: Invocation): Promise<Completion> {
 
 function isRenameAnswer(completion: Completion): completion is Answer & RenameAnswer { return !('category' in completion) && 'renamePlan' in completion; }
 
-async function helpState(root: string | undefined): Promise<string> {
-  const status = await serverStatus(root);
-  if ('category' in status) return '<server state="unavailable"/>';
-  const attributes = (Array.isArray(status.data) ? status.data[0]! : status.data).attributes ?? {};
-  if (attributes.state === 'stopped') return '<server state="stopped"/>';
-  return renderNode({ element: 'server', attributes });
+function helpState(rootOverride: string | undefined): string {
+  const root = discoverRoot(rootOverride);
+  const paths = pathsForRoot(root);
+  const state = readState(paths);
+  if (!state) return '<server state="stopped"/>';
+  const metadata = readMetadata(paths.store);
+  return renderNode({ element: 'server', attributes: { root, state: state.state, indexedCommit: metadata?.indexedCommit, indexDuration: metadata === null ? undefined : `${Math.round(metadata.indexDurationMs)}ms`, index: state.index, declarations: state.declarations } });
 }
 
 function rootFlag(argv: readonly string[]): string | undefined {

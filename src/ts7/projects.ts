@@ -4,7 +4,7 @@ import type { Project } from 'typescript/unstable/sync';
 import { Ts7Host } from './api.js';
 
 const sourceExtensions = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
-const skipped = new Set(['node_modules', '.git', 'dist', 'build', 'coverage']);
+export const skippedDirectories: ReadonlySet<string> = new Set(['node_modules', '.git', 'dist', 'build', 'coverage']);
 
 export interface ConfiguredProject { config: string; files: ReadonlySet<string>; bootstrap: string | null; }
 
@@ -62,7 +62,7 @@ export function discoverDirectories(root: string): string[] {
   const directories = [path.resolve(root)];
   const visit = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isDirectory() || skipped.has(entry.name)) continue;
+      if (!entry.isDirectory() || skippedDirectories.has(entry.name)) continue;
       const full = path.resolve(dir, entry.name);
       directories.push(full);
       visit(full);
@@ -87,5 +87,5 @@ function statOrNull(file: string) {
 function workspaceSourceFile(root: string, file: string): boolean {
   if (!existsSync(file) || !sourceExtensions.has(path.extname(file))) return false;
   const relative = path.relative(root, file);
-  return relative !== '' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) && !relative.split(path.sep).some((part) => skipped.has(part));
+  return relative !== '' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) && !relative.split(path.sep).some((part) => skippedDirectories.has(part));
 }

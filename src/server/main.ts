@@ -70,6 +70,17 @@ async function main(): Promise<void> {
     try { semantic?.program.close(); }
     catch (error) { append(paths, `TypeScript 7 shutdown failure: ${safe(error)}`); }
   };
+  const publishedState = (snapshot = index?.current()) => ({
+    root,
+    pid: process.pid,
+    bootedAt: bootedAt.toISOString(),
+    port: paths.port,
+    log: paths.log,
+    idleDeadline: new Date(Date.now() + idleSeconds() * 1000).toISOString(),
+    state: stopping ? 'stopping' as const : 'ready' as const,
+    index: snapshot === undefined ? undefined : snapshot.state === 'current' ? 'current' as const : 'stale' as const,
+    declarations: snapshot?.built.receipt.declarations,
+  });
 
   const server = createServer((socket) => {
     sockets.add(socket);
@@ -237,7 +248,10 @@ async function main(): Promise<void> {
           } else {
             built = buildIndex(root, program, configured, store);
           }
-          index = new IndexStateController({ indexedAt: indexedAt(root), state: 'current', built }, (snapshot) => { semantic!.index = snapshot; });
+          index = new IndexStateController({ indexedAt: indexedAt(root), state: 'current', built }, (snapshot) => {
+            semantic!.index = snapshot;
+            publishState(paths, publishedState(snapshot));
+          });
           semantic!.store = store;
           if (active) sendPhase(active.socket, active.request.requestId, 'index-build-end', remaining(loadDeadlineAt));
         })(),
@@ -372,7 +386,7 @@ async function main(): Promise<void> {
       if (!stopping) {
         stopping = true;
         if (idleTimer) clearTimeout(idleTimer);
-        publishState(paths, { root, pid: process.pid, bootedAt: bootedAt.toISOString(), port: paths.port, log: paths.log, idleDeadline: new Date().toISOString(), state: 'stopping' });
+        publishState(paths, publishedState());
         for (const [invokeSocket, requestId] of invokeSockets) {
           const deadlineAt = active?.socket === invokeSocket ? (loading ? loadDeadlineAt : activeDeadlineAt) : undefined;
           sendPhase(invokeSocket, requestId, 'stopping', deadlineAt === undefined ? undefined : remaining(deadlineAt));
@@ -403,7 +417,7 @@ async function main(): Promise<void> {
   removeEndpoint(paths);
   server.listen(paths.port, () => {
     chmodSync(paths.port, 0o600);
-    publishState(paths, { root, pid: process.pid, bootedAt: bootedAt.toISOString(), port: paths.port, log: paths.log, idleDeadline: new Date(Date.now() + idleSeconds() * 1000).toISOString(), state: 'ready' });
+    publishState(paths, publishedState());
     append(paths, `ready pid=${process.pid} root=${root}`);
     touch();
   });
