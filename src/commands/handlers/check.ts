@@ -1,38 +1,17 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { matchesGlob, Workspace } from '../../core/workspace.js';
-import type { DiagnosticEvent } from '../../server/tsserver.js';
+import { diagnosticsForFiles, type CheckerDiagnostic } from '../../ts7/checker.js';
 import type { SemanticHandler } from '../handlers.js';
 import type { InvocationError, ToolError } from '../types.js';
-
-interface Response { success?: boolean; body?: unknown; message?: string; }
-interface ProtocolDiagnostic {
-  start?: { line?: number; offset?: number };
-  startLocation?: { line?: number; offset?: number };
-  code?: number;
-  category?: string | number;
-  message?: string | MessageChain;
-  text?: string | MessageChain;
-  messageText?: string | MessageChain;
-}
-interface MessageChain { messageText: string; next?: readonly MessageChain[]; }
-interface Diagnostic {
-  file: string;
-  line: number;
-  column: number;
-  severity: string;
-  code: number;
-  message: string;
-}
 
 const handler: SemanticHandler = async (context, invocation) => {
   const started = performance.now();
   try {
     await context.projects.bootstrap();
     const paths = invocation.input.args;
-    const diagnostics = paths.length > 0
-      ? await diagnosticsForFiles(context, await explicitFiles(context, invocation, paths))
-      : await diagnosticsForProjects(context);
+    const files = paths.length > 0 ? await explicitFiles(context, invocation, paths) : undefined;
+    const diagnostics = diagnosticsForFiles(context.program, context.root, await diagnosticScopes(context, files));
     const filtered = finish(diagnostics, invocation);
     const limit = invocation.input.flags['--limit'] as number | undefined;
     const shown = limit === undefined ? filtered : filtered.slice(0, limit);
@@ -71,68 +50,20 @@ async function explicitFiles(context: Parameters<SemanticHandler>[0], invocation
   return files;
 }
 
-async function diagnosticsForFiles(context: Parameters<SemanticHandler>[0], files: readonly string[]): Promise<Diagnostic[]> {
-  const diagnostics: Diagnostic[] = [];
-  for (const file of files) {
-    const found = await context.session.withOpen(file, async () => [
-      ...await synchronousDiagnostics(context, 'syntacticDiagnosticsSync', file),
-      ...await synchronousDiagnostics(context, 'semanticDiagnosticsSync', file),
-    ]);
-    diagnostics.push(...found);
+async function diagnosticScopes(context: Parameters<SemanticHandler>[0], files: readonly string[] | undefined): Promise<Array<{ config: string; files: string[] }>> {
+  const candidates = files ?? [...new Set(context.projects.records().flatMap((project) => [...project.files]))];
+  const scopes = new Map<string, string[]>();
+  for (const file of candidates) {
+    const project = await context.projects.membership(file);
+    if (!project) continue;
+    const owned = scopes.get(project.config) ?? [];
+    owned.push(file);
+    scopes.set(project.config, owned);
   }
-  return diagnostics;
+  return [...scopes].map(([config, owned]) => ({ config, files: owned }));
 }
 
-async function synchronousDiagnostics(context: Parameters<SemanticHandler>[0], command: 'syntacticDiagnosticsSync' | 'semanticDiagnosticsSync', file: string): Promise<Diagnostic[]> {
-  const response = await context.session.request(command, { file, includeLinePosition: true }) as Response;
-  if (response.success === false) throw new Error(response.message ?? `TypeScript rejected ${command}.`);
-  return Array.isArray(response.body) ? (response.body as ProtocolDiagnostic[]).map((diagnostic) => normalize(file, diagnostic, context.root)) : []; 
-}
-
-async function diagnosticsForProjects(context: Parameters<SemanticHandler>[0]): Promise<Diagnostic[]> {
-  const diagnostics: Diagnostic[] = [];
-  for (const project of context.projects.records()) {
-    if (!project.bootstrap) continue;
-    const events = await context.session.diagnosticsForProject(project.bootstrap);
-    diagnostics.push(...eventDiagnostics(context.root, events), ...configDiagnostics(context.root, context.session.drainEvents('configFileDiag')));
-  }
-  return unique(diagnostics);
-}
-
-function eventDiagnostics(root: string, events: readonly DiagnosticEvent[]): Diagnostic[] {
-  const diagnostics: Diagnostic[] = [];
-  for (const event of events) {
-    const file = path.resolve(event.file);
-    if (!inside(root, file)) continue;
-    for (const diagnostic of event.diagnostics as ProtocolDiagnostic[]) diagnostics.push(normalize(file, diagnostic, root));
-  }
-  return diagnostics;
-}
-
-function configDiagnostics(root: string, events: readonly { body?: unknown }[]): Diagnostic[] {
-  const diagnostics: Diagnostic[] = [];
-  for (const event of events) {
-    const body = event.body as { configFile?: string; triggerFile?: string; diagnostics?: ProtocolDiagnostic[] } | undefined;
-    const file = body?.configFile ?? body?.triggerFile;
-    if (!file || !inside(root, path.resolve(file))) continue;
-    for (const diagnostic of body?.diagnostics ?? []) diagnostics.push(normalize(path.resolve(file), diagnostic, root));
-  }
-  return diagnostics;
-}
-
-function normalize(file: string, diagnostic: ProtocolDiagnostic, root?: string): Diagnostic {
-  const base = root ?? path.dirname(path.dirname(file));
-  return {
-    file: relative(base, file),
-    line: diagnostic.start?.line ?? diagnostic.startLocation?.line ?? 0,
-    column: diagnostic.start?.offset ?? diagnostic.startLocation?.offset ?? 0,
-    severity: severity(diagnostic.category),
-    code: diagnostic.code ?? 0,
-    message: flatten(diagnostic.message ?? diagnostic.text ?? diagnostic.messageText ?? ''),
-  };
-}
-
-function finish(diagnostics: readonly Diagnostic[], invocation: Parameters<SemanticHandler>[1]): Diagnostic[] {
+function finish(diagnostics: readonly CheckerDiagnostic[], invocation: Parameters<SemanticHandler>[1]): CheckerDiagnostic[] {
   const errorsOnly = invocation.input.flags['--errors-only'] === true;
   const include = (invocation.input.flags['--in'] as string[] | undefined) ?? [];
   const exclude = (invocation.input.flags['--exclude'] as string[] | undefined) ?? [];
@@ -142,32 +73,15 @@ function finish(diagnostics: readonly Diagnostic[], invocation: Parameters<Seman
     .sort(compare);
 }
 
-function renderDiagnostic(diagnostic: Diagnostic) {
+function renderDiagnostic(diagnostic: CheckerDiagnostic) {
   return { element: 'diagnostic', attributes: { at: `${diagnostic.file}:${diagnostic.line}:${diagnostic.column}`, severity: diagnostic.severity, code: diagnostic.code }, text: diagnostic.message };
 }
 
-function severity(category: ProtocolDiagnostic['category']): string {
-  if (category === 0 || category === 'warning') return 'warning';
-  if (category === 1 || category === 'error') return 'error';
-  if (category === 2 || category === 'suggestion') return 'suggestion';
-  return 'message';
-}
-
-function flatten(value: string | MessageChain): string {
-  if (typeof value === 'string') return value;
-  return [value.messageText, ...(value.next ?? []).map(flatten)].join('\n');
-}
-
-function unique(diagnostics: readonly Diagnostic[]): Diagnostic[] {
-  return [...new Map(diagnostics.map((diagnostic) => [`${diagnostic.file}:${diagnostic.line}:${diagnostic.column}:${diagnostic.code}:${diagnostic.severity}:${diagnostic.message}`, diagnostic])).values()];
-}
-
-function compare(left: Diagnostic, right: Diagnostic): number {
+function compare(left: CheckerDiagnostic, right: CheckerDiagnostic): number {
   return (left.file < right.file ? -1 : left.file > right.file ? 1 : 0) || left.line - right.line || left.column - right.column || left.code - right.code;
 }
 
 function hasGlob(value: string): boolean { return /[*?[{]/.test(value); }
-function inside(root: string, file: string): boolean { const value = path.relative(root, file); return value === '' || !value.startsWith(`..${path.sep}`) && value !== '..' && !path.isAbsolute(value); }
 function relative(root: string, file: string): string { return path.relative(root, file).split(path.sep).join('/'); }
 
 function invocationFailure(code: string, message: string, _received: string, expected: string): InvocationError {
@@ -176,7 +90,7 @@ function invocationFailure(code: string, message: string, _received: string, exp
 
 function failure(error: unknown): InvocationError | ToolError {
   if (isCompletionError(error)) return error;
-  return { category: 'tool', code: 'typescript-error', message: 'TypeScript could not answer the diagnostic query.', received: error instanceof Error ? error.message : String(error), expected: 'successful TypeScript diagnostic responses', next: 'Read the server log, then retry.' };
+  return { category: 'tool', code: 'typescript-error', message: 'TypeScript could not answer the diagnostic query.', received: error instanceof Error ? error.message : String(error), expected: 'successful TypeScript Program diagnostics', next: 'Read the server log, then retry.' };
 }
 
 function isCompletionError(value: unknown): value is InvocationError | ToolError {
