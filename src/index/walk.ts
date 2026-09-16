@@ -8,7 +8,7 @@ import { describeFile, type KeyedDeclaration } from './descriptor.js';
 import { isIndexedDeclaration } from './scope.js';
 import type { DeclarationKind, DeclarationNode, ExternalNode, FileGraph, IndexGraph, IndexRelationship, ReferenceRole, TypePosition } from './graph.js';
 
-interface FileState {
+export interface WalkFileState {
   absolute: string;
   file: string;
   source: ts.SourceFile;
@@ -18,6 +18,18 @@ interface FileState {
   indexed: readonly KeyedDeclaration[];
   byStart: ReadonlyMap<number, KeyedDeclaration>;
   nodesByStart: ReadonlyMap<number, ts.Node>;
+  ownersByStart: ReadonlyMap<number, KeyedDeclaration>;
+  semanticNodes: readonly ts.Node[];
+  typeIdentifierPositions: ReadonlySet<number>;
+}
+
+const walkStates = new WeakMap<IndexGraph, readonly WalkFileState[]>();
+
+/** Returns the snapshot-backed file state created by walkIndex for heritage enrichment. */
+export function walkFileStates(graph: IndexGraph): readonly WalkFileState[] {
+  const states = walkStates.get(graph);
+  if (!states) throw new Error('Heritage enrichment requires the graph returned by walkIndex.');
+  return states;
 }
 
 export function walkIndex(root: string, program: Ts7Host, projects: ConfiguredProjects): IndexGraph {
@@ -51,7 +63,7 @@ export function walkIndex(root: string, program: Ts7Host, projects: ConfiguredPr
     }
   }
 
-  const symbolTargets = declarationSymbolTargets(states);
+  const { symbols: symbolTargets, definitions } = declarationSymbolTargets(states);
   const resolvedTargets = new Map<number, Target>();
 
   for (const state of states) {
@@ -66,14 +78,8 @@ export function walkIndex(root: string, program: Ts7Host, projects: ConfiguredPr
       if (declaration.container) add({ type: 'CONTAINS', from: declaration.container, to: declaration.key });
     }
 
-    const semanticNodes: ts.Node[] = [];
-    const collectSemanticNodes = (node: ts.Node): void => {
-      if (ts.isIdentifier(node)) semanticNodes.push(node);
-      if (ts.isImportDeclaration(node)) semanticNodes.push(node.moduleSpecifier);
-      node.forEachChild(collectSemanticNodes);
-    };
-    state.source.forEachChild(collectSemanticNodes);
-    const positions = semanticNodes.map((node) => node.getStart(state.source));
+    const definitionTargets = definitions.get(state.file) ?? new Map<number, string | null>();
+    const positions = [...new Set(state.semanticNodes.map((node) => node.getStart(state.source)).filter((position) => !definitionTargets.has(position) || state.typeIdentifierPositions.has(position)))];
     const symbols = state.checker.getSymbolAtPosition(state.absolute, positions);
     const symbolsByPosition = new Map(positions.map((position, index) => [position, symbols[index]]));
     const symbolFor = (node: ts.Node): TsSymbol | undefined => symbolsByPosition.get(node.getStart(state.source));
@@ -104,16 +110,22 @@ export function walkIndex(root: string, program: Ts7Host, projects: ConfiguredPr
       resolvedTargets.set(resolved.id, target);
       return addTarget(target, false);
     };
+    const definitionTarget = (position: number): string | null | undefined => {
+      if (!definitionTargets.has(position)) return undefined;
+      const target = definitionTargets.get(position)!;
+      if (target === null) internalSites++;
+      return target;
+    };
     const ownerFor = (node: ts.Node): string => ownerForNode(state, node).key;
     const point = (node: ts.Node): { line: number; col: number } => {
       const value = state.source.getLineAndCharacterOfPosition(node.getStart(state.source));
       return { line: value.line + 1, col: value.character + 1 };
     };
-    const reference = (node: ts.Identifier, role: ReferenceRole, target?: string | null): void => {
+    const reference = (node: ts.Identifier, role: ReferenceRole, target?: string | null | (() => string | null)): void => {
       const start = node.getStart(state.source);
       if (seenReferences.has(start)) return;
       seenReferences.add(start);
-      const resolved = target === undefined ? targetFor(state.checker.getSymbolAtLocation(node), start) : target;
+      const resolved = typeof target === 'function' ? target() : target === undefined ? targetFor(symbolFor(node), start) : target;
       if (!resolved) return;
       const site = point(node);
       add({ type: 'REFERENCES', from: ownerFor(node), to: resolved, ...site, role });
@@ -144,7 +156,11 @@ export function walkIndex(root: string, program: Ts7Host, projects: ConfiguredPr
       if (callee) call(node, callee);
       if (ts.isIdentifier(node)) {
         const start = node.getStart(state.source);
-        reference(node, referenceRole(node, callee !== null), callTargets.has(start) ? callTargets.get(start) : targetFor(symbolFor(node), start));
+        reference(node, referenceRole(node, callee !== null), () => {
+          if (callTargets.has(start)) return callTargets.get(start)!;
+          const target = definitionTarget(start);
+          return target === undefined ? targetFor(symbolFor(node), start) : target;
+        });
       }
       if (isTypeNode(node)) typeMention(node);
       if (ts.isImportDeclaration(node)) {
@@ -169,26 +185,42 @@ export function walkIndex(root: string, program: Ts7Host, projects: ConfiguredPr
     const ids = [...new Set(state.indexed.map((descriptor) => descriptor.key))];
     files.set(state.file, { declarations: ids, relationships: fileRelationships.get(state.file)! });
   }
-  return { declarations, externals, files, relationships: [...fileRelationships.values()].flat(), internalSites, unresolvedOccurrences };
+  const graph = { declarations, externals, files, relationships: [...fileRelationships.values()].flat(), internalSites, unresolvedOccurrences };
+  walkStates.set(graph, states);
+  return graph;
 }
 
-function statesFor(root: string, program: Ts7Host, configured: readonly ConfiguredProject[]): FileState[] {
+function statesFor(root: string, program: Ts7Host, configured: readonly ConfiguredProject[]): WalkFileState[] {
   const owner = new Map<string, ConfiguredProject>();
   for (const project of configured) for (const file of project.files) if (!owner.has(file)) owner.set(file, project);
-  return [...owner].sort(([left], [right]) => left.localeCompare(right)).flatMap(([absolute, configuredProject]) => {
-    const source = program.sourceFile(configuredProject.config, absolute);
-    const project = program.withSnapshot((snapshot) => snapshot.getProject(configuredProject.config));
+  return program.withSnapshot((snapshot) => [...owner].sort(([left], [right]) => left.localeCompare(right)).flatMap(([absolute, configuredProject]) => {
+    const project = snapshot.getProject(configuredProject.config);
+    const source = project?.program.getSourceFile(absolute);
     if (!source || !project) return [];
     const file = relative(root, absolute);
     const descriptors = describeFile(file, source.text);
     const indexed = descriptors.filter(isIndexedDeclaration);
     const byStart = new Map(indexed.map((descriptor) => [descriptor.start, descriptor]));
+    const module = indexed.find((descriptor) => descriptor.scope === 'module');
+    if (!module) throw new Error(`No module declaration exists for ${file}.`);
     const nodesByStart = new Map<number, ts.Node>();
-    const collectNodes = (node: ts.Node): void => {
-      if (!nodesByStart.has(node.getStart(source))) nodesByStart.set(node.getStart(source), node);
-      node.forEachChild(collectNodes);
+    const ownersByStart = new Map<number, KeyedDeclaration>();
+    const semanticNodes: ts.Node[] = [];
+    const typeIdentifierPositions = new Set<number>();
+    const collect = (node: ts.Node, parentOwner: KeyedDeclaration): void => {
+      const start = node.getStart(source);
+      const nextOwner = byStart.get(start) ?? parentOwner;
+      if (!nodesByStart.has(start)) nodesByStart.set(start, node);
+      if (!ownersByStart.has(start)) ownersByStart.set(start, nextOwner);
+      if (ts.isIdentifier(node)) semanticNodes.push(node);
+      if (isTypeNode(node)) {
+        const identifier = firstIdentifier(node);
+        if (identifier) typeIdentifierPositions.add(identifier.getStart(source));
+      }
+      if (ts.isImportDeclaration(node)) semanticNodes.push(node.moduleSpecifier);
+      node.forEachChild((child) => collect(child, nextOwner));
     };
-    source.forEachChild(collectNodes);
+    source.forEachChild((node) => collect(node, module));
     return [{
       absolute,
       file,
@@ -199,20 +231,27 @@ function statesFor(root: string, program: Ts7Host, configured: readonly Configur
       indexed,
       byStart,
       nodesByStart,
+      ownersByStart,
+      semanticNodes,
+      typeIdentifierPositions,
     }];
-  });
+  }));
 }
 
-function ownerForNode(state: FileState, node: ts.Node): KeyedDeclaration {
-  for (let current: ts.Node | undefined = node; current && !ts.isSourceFile(current); current = current.parent) {
+function ownerForNode(state: WalkFileState, node: ts.Node): KeyedDeclaration {
+  if (ts.isSourceFile(node)) return state.indexed.find((descriptor) => descriptor.scope === 'module')!;
+  const owner = state.ownersByStart.get(node.getStart(state.source));
+  if (owner) return owner;
+  for (let current: ts.Node | undefined = node.parent; current && !ts.isSourceFile(current); current = current.parent) {
     const descriptor = state.byStart.get(current.getStart(state.source));
     if (descriptor) return descriptor;
   }
   return state.indexed.find((descriptor) => descriptor.scope === 'module')!;
 }
 
-function declarationSymbolTargets(states: readonly FileState[]): Map<number, string | null> {
-  const targets = new Map<number, string | null>();
+function declarationSymbolTargets(states: readonly WalkFileState[]): { symbols: Map<number, string | null>; definitions: ReadonlyMap<string, ReadonlyMap<number, string | null>> } {
+  const symbolsById = new Map<number, string | null>();
+  const declarations: { state: WalkFileState; descriptor: KeyedDeclaration; symbol: TsSymbol }[] = [];
   for (const state of states) {
     const descriptors = state.descriptors.filter((descriptor) => descriptor.scope !== 'module');
     const symbols = state.checker.getSymbolAtPosition(state.absolute, descriptors.map((descriptor) => descriptor.nameStart));
@@ -220,14 +259,23 @@ function declarationSymbolTargets(states: readonly FileState[]): Map<number, str
       const descriptor = descriptors[index]!;
       const symbol = symbols[index];
       if (!symbol) continue;
+      declarations.push({ state, descriptor, symbol });
       const key = isIndexedDeclaration(descriptor) ? descriptor.key : null;
-      if (key !== null || !targets.has(symbol.id)) targets.set(symbol.id, key);
+      if (key !== null || !symbolsById.has(symbol.id)) symbolsById.set(symbol.id, key);
     }
   }
-  return targets;
+  const definitions = new Map<string, Map<number, string | null>>();
+  for (const { state, descriptor, symbol } of declarations) {
+    const target = symbolsById.get(symbol.id);
+    if (target === undefined) continue;
+    const file = definitions.get(state.file) ?? new Map<number, string | null>();
+    file.set(descriptor.nameStart, target);
+    definitions.set(state.file, file);
+  }
+  return { symbols: symbolsById, definitions };
 }
 
-function declarationNode(state: FileState, descriptor: KeyedDeclaration): DeclarationNode {
+function declarationNode(state: WalkFileState, descriptor: KeyedDeclaration): DeclarationNode {
   const name = state.source.getLineAndCharacterOfPosition(descriptor.nameStart);
   const start = state.source.getLineAndCharacterOfPosition(descriptor.start);
   const end = state.source.getLineAndCharacterOfPosition(descriptor.end);
@@ -378,7 +426,7 @@ function importNames(node: ts.ImportDeclaration, _source: ts.SourceFile): string
   return names.join(', ');
 }
 
-function directExports(state: FileState, add: (relationship: IndexRelationship) => void): void {
+function directExports(state: WalkFileState, add: (relationship: IndexRelationship) => void): void {
   for (const descriptor of state.indexed) {
     const node = state.nodesByStart.get(descriptor.start);
     if (!node || !isExported(node)) continue;
@@ -387,7 +435,7 @@ function directExports(state: FileState, add: (relationship: IndexRelationship) 
   }
 }
 
-function exportDeclaration(stateNode: ts.ExportDeclaration, state: FileState, lookup: DeclarationLookup, addTarget: (target: Target, unresolved: boolean) => string | null, add: (relationship: IndexRelationship) => void, alias: (symbol: TsSymbol) => TsSymbol): void {
+function exportDeclaration(stateNode: ts.ExportDeclaration, state: WalkFileState, lookup: DeclarationLookup, addTarget: (target: Target, unresolved: boolean) => string | null, add: (relationship: IndexRelationship) => void, alias: (symbol: TsSymbol) => TsSymbol): void {
   const clause = stateNode.exportClause;
   if (!clause || !ts.isNamedExports(clause)) return;
   for (const element of clause.elements) {

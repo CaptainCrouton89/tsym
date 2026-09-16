@@ -1,11 +1,11 @@
-import path from 'node:path';
 import { SymbolFlags, type Checker, type Symbol as TsSymbol } from 'typescript/unstable/sync';
 import * as ts from '../ts7/ast.js';
 import { Ts7Host } from '../ts7/api.js';
-import { ConfiguredProjects, type ConfiguredProject } from '../ts7/projects.js';
-import { describeFile, type KeyedDeclaration } from './descriptor.js';
+import { ConfiguredProjects } from '../ts7/projects.js';
 import type { CallRelationship, IndexGraph, IndexRelationship } from './graph.js';
 import { isIndexedDeclaration } from './scope.js';
+import { relative } from './classify.js';
+import { walkFileStates, type WalkFileState } from './walk.js';
 
 export interface HeritageRelationship { type: 'EXTENDS' | 'IMPLEMENTS'; from: string; to: string; }
 
@@ -15,23 +15,15 @@ export interface HeritageGraph {
   dispatchCalls: number;
 }
 
-interface FileState {
-  absolute: string;
-  file: string;
-  source: ts.SourceFile;
-  checker: Checker;
-  declarations: ReadonlyMap<number, KeyedDeclaration>;
-  nodes: ReadonlyMap<number, ts.Node>;
-}
 
 /** Adds compiler-resolved heritage edges and marks calls that require implementation dispatch. */
 export function addHeritage(root: string, program: Ts7Host, projects: ConfiguredProjects, graph: IndexGraph): HeritageGraph {
-  const states = statesFor(root, program, projects.records());
+  const states = walkFileStates(graph);
   const stateByFile = new Map(states.map((state) => [state.file, state]));
   const declarationsByKey = new Map<string, ts.Node[]>();
-  for (const state of states) for (const descriptor of state.declarations.values()) {
+  for (const state of states) for (const descriptor of state.descriptors) {
     if (!graph.declarations.has(descriptor.key)) continue;
-    const node = state.nodes.get(descriptor.start);
+    const node = state.nodesByStart.get(descriptor.start);
     if (!node) continue;
     const nodes = declarationsByKey.get(descriptor.key) ?? [];
     nodes.push(node);
@@ -45,7 +37,7 @@ export function addHeritage(root: string, program: Ts7Host, projects: Configured
       if (!declaration) continue;
       const file = relative(root, declaration.getSourceFile().fileName);
       const state = stateByFile.get(file);
-      const descriptor = state?.declarations.get(declaration.getStart(declaration.getSourceFile()));
+      const descriptor = state?.byStart.get(declaration.getStart(declaration.getSourceFile()));
       if (descriptor && graph.declarations.has(descriptor.key)) return descriptor.key;
     }
     return undefined;
@@ -56,7 +48,7 @@ export function addHeritage(root: string, program: Ts7Host, projects: Configured
   for (const state of states) {
     const visit = (node: ts.Node): void => {
       if (ts.isClassDeclaration(node) || ts.isClassExpression(node) || ts.isInterfaceDeclaration(node)) {
-        const source = state.declarations.get(node.getStart(state.source));
+        const source = state.byStart.get(node.getStart(state.source));
         if (source && graph.declarations.has(source.key)) {
           for (const clause of node.heritageClauses ?? []) {
             for (const type of clause.types) {
@@ -90,38 +82,19 @@ export function addHeritage(root: string, program: Ts7Host, projects: Configured
   return { graph: decorated, relationships: [...relationships.values()], dispatchCalls };
 }
 
-function addMatchingMembers(node: ts.ClassDeclaration | ts.ClassExpression, state: FileState, target: string, targetKey: (checker: Checker, symbol: TsSymbol | undefined) => string | undefined, declarationsByKey: ReadonlyMap<string, readonly ts.Node[]>, add: (relationship: HeritageRelationship) => void): void {
+function addMatchingMembers(node: ts.ClassDeclaration | ts.ClassExpression, state: WalkFileState, target: string, targetKey: (checker: Checker, symbol: TsSymbol | undefined) => string | undefined, declarationsByKey: ReadonlyMap<string, readonly ts.Node[]>, add: (relationship: HeritageRelationship) => void): void {
   const targetDeclaration = declarationsByKey.get(target)?.find((candidate) => ts.isInterfaceDeclaration(candidate));
   if (!targetDeclaration || !ts.isInterfaceDeclaration(targetDeclaration)) return;
   const targetType = state.checker.getTypeAtLocation(targetDeclaration.name);
   if (!targetType) return;
   for (const member of node.members) {
-    const descriptor = state.declarations.get(member.getStart(state.source));
+    const descriptor = state.byStart.get(member.getStart(state.source));
     const name = memberName(member);
     if (!descriptor || !name || !isIndexedDeclaration(descriptor) || hasModifier(member, ts.SyntaxKind.AbstractKeyword)) continue;
     const interfaceMember = state.checker.getPropertyOfType(targetType, name);
     const memberTarget = targetKey(state.checker, interfaceMember);
     if (memberTarget) add({ type: 'IMPLEMENTS', from: descriptor.key, to: memberTarget });
   }
-}
-
-function statesFor(root: string, program: Ts7Host, configured: readonly ConfiguredProject[]): FileState[] {
-  const owner = new Map<string, ConfiguredProject>();
-  for (const project of configured) for (const file of project.files) if (!owner.has(file)) owner.set(file, project);
-  return program.withSnapshot((snapshot) => [...owner].sort(([left], [right]) => left.localeCompare(right)).flatMap(([absolute, configuredProject]) => {
-    const project = snapshot.getProject(configuredProject.config);
-    const source = project?.program.getSourceFile(absolute);
-    if (!source || !project) return [];
-    const file = relative(root, absolute);
-    const declarations = new Map(describeFile(file, source.text).map((descriptor) => [descriptor.start, descriptor]));
-    const nodes = new Map<number, ts.Node>();
-    const collect = (node: ts.Node): void => {
-      if (!nodes.has(node.getStart(source))) nodes.set(node.getStart(source), node);
-      node.forEachChild(collect);
-    };
-    source.forEachChild(collect);
-    return [{ absolute, file, source, checker: project.checker, declarations, nodes }];
-  }));
 }
 
 function memberName(node: ts.Node): string | undefined {
@@ -143,5 +116,3 @@ function isDispatchTarget(node: ts.Node): boolean {
 function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
   return (node as ts.Node & { modifiers?: readonly { kind: ts.SyntaxKind }[] }).modifiers?.some((modifier) => modifier.kind === kind) === true;
 }
-
-function relative(root: string, file: string): string { return path.relative(root, file).split(path.sep).join('/'); }
