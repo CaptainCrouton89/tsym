@@ -47,7 +47,6 @@ export function roleAt(context: SemanticContext, file: string, line: number, col
 
 export function classifyTarget(context: SemanticContext, target: DefinitionTarget): TargetClass {
   const file = target.file;
-  if (external(file)) return 'external';
   const compiler = loadCompiler(context);
   const source = parse(context, file, compiler);
   let node: ts.Node | undefined = tokenAt(source, source.getPositionOfLineAndCharacter(target.start.line - 1, target.start.offset - 1));
@@ -55,7 +54,12 @@ export function classifyTarget(context: SemanticContext, target: DefinitionTarge
     if (compiler.isMethodSignature(node) || compiler.isCallSignatureDeclaration(node) || compiler.isConstructSignatureDeclaration(node)) return 'dispatch';
     if ((compiler.isMethodDeclaration(node) || compiler.isFunctionDeclaration(node)) && hasModifier(node, compiler.SyntaxKind.AbstractKeyword, compiler)) return 'dispatch';
     if (hasModifier(node, compiler.SyntaxKind.DeclareKeyword, compiler)) return 'dispatch';
-    if (namedCallable(node, compiler)) return 'concrete';
+    if (namedCallable(node, compiler)) {
+      for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
+        if (hasModifier(parent, compiler.SyntaxKind.DeclareKeyword, compiler) || compiler.isSourceFile(parent) && parent.isDeclarationFile) return 'dispatch';
+      }
+      return external(file) ? 'external' : 'concrete';
+    }
     if (compiler.isParameter(node) || compiler.isPropertyDeclaration(node) || compiler.isVariableDeclaration(node)) return 'noncallable';
     node = node.parent;
   }

@@ -49,6 +49,11 @@ test('outline, find, and show use the resident compiler without opening outline 
     assert.match(shown.stdout, /<symbol at="src\/app\.ts:5:17" name="run" kind="function" lines="5">/);
     assert.match(shown.stdout, /<symbol at="src\/greet\.ts:0:0"/);
     assert.ok(shown.stdout.indexOf('name="run"') < shown.stdout.indexOf('name="greet.ts"'));
+    const overload = run(root, cache, 'show', 'overloaded');
+    assert.equal(overload.status, 0, overload.stderr);
+    assert.equal((overload.stdout.match(/export function overloaded/g) ?? []).length, 3);
+    assert.doesNotMatch(overload.stdout, /overloadUsage/);
+
     const memberSource = run(root, cache, 'show', 'Greeter.say');
     assert.match(memberSource.stdout, /say\(name: string\): string/);
     const invalidAddress = run(root, cache, 'show', 'src/greet.ts:7:14');

@@ -144,7 +144,7 @@ async function followSite(context: SemanticContext, current: DeclarationRecord, 
 async function implementationsAt(context: SemanticContext, target: DefinitionTarget): Promise<DeclarationRecord[]> {
   const body = await bodyOf(context, 'implementation', { file: target.file, line: target.start.line, offset: target.start.offset });
   const records: DeclarationRecord[] = [];
-  for (const definition of definitionList(body)) if (!external(definition.file)) {
+  for (const definition of definitionList(body)) if (!external(definition.file) && classifyTarget(context, definition) === 'concrete') {
     const record = await recordFor(context, definition);
     if (record) records.push(record);
   }

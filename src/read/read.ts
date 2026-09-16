@@ -98,11 +98,14 @@ export function declarationSpans(tree: NavtreeItem, record: DeclarationRecord): 
   if (record.location.line === 0) return [];
   const found: Span[] = [];
   const visit = (item: NavtreeItem) => {
-    if (item.nameSpan?.start.line === record.location.line && item.nameSpan.start.offset === record.location.col) found.push(...item.spans);
+    if (item.text === record.name && item.spans.some((span) =>
+      (record.location.line > span.start.line || record.location.line === span.start.line && record.location.col >= span.start.offset) &&
+      (record.location.line < span.end.line || record.location.line === span.end.line && record.location.col < span.end.offset))) found.push(...item.spans);
     for (const child of item.childItems ?? []) visit(child);
   };
   visit(tree);
-  return found.length > 0 ? found.sort((a, b) => a.start.line - b.start.line || a.start.offset - b.start.offset) : [{ start: { line: record.location.line, offset: record.location.col }, end: { line: record.location.line, offset: record.location.col } }];
+  if (!found.length) throw new DeclarationError('unresolvable-symbol', `No declaration span contains ${record.address}.`);
+  return found.sort((a, b) => a.start.line - b.start.line || a.start.offset - b.start.offset);
 }
 
 export function sourceSpan(source: string, span: Span): string { return source.slice(positionOffset(source, span.start), positionOffset(source, span.end)); }
