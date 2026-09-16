@@ -18,7 +18,7 @@ export interface DeclarationRow {
   endLine: number;
   lines: number;
   declCount: number;
-  container: string;
+  container: string | null;
 }
 
 export interface ExternalRow { key: string; module: string; name: string; }

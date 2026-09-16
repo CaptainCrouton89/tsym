@@ -12,6 +12,8 @@ export interface SemanticContext {
   projects: ProjectRegistry;
   resolver: DeclarationResolver;
   source: SourceReader;
+  store?: import('../store/store.js').Store;
+  index?: import('../index/build.js').BuiltIndex;
 }
 
 export function createSemanticContext(root: string, writeLog: (chunk: Buffer) => void): SemanticContext {

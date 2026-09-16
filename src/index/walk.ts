@@ -366,9 +366,14 @@ function isFunctionLike(node: ts.Node): boolean {
   return node.kind === ts.SyntaxKind.FunctionDeclaration || node.kind === ts.SyntaxKind.FunctionExpression || node.kind === ts.SyntaxKind.ArrowFunction || node.kind === ts.SyntaxKind.MethodDeclaration || node.kind === ts.SyntaxKind.MethodSignature || node.kind === ts.SyntaxKind.GetAccessor || node.kind === ts.SyntaxKind.SetAccessor || node.kind === ts.SyntaxKind.Constructor || node.kind === ts.SyntaxKind.CallSignature || node.kind === ts.SyntaxKind.ConstructSignature || node.kind === ts.SyntaxKind.IndexSignature;
 }
 
-function importNames(node: ts.ImportDeclaration, source: ts.SourceFile): string {
+function importNames(node: ts.ImportDeclaration, _source: ts.SourceFile): string {
   const clause = node.importClause;
-  return clause ? clause.getText(source).replace(/^type\s+/, '') : '*';
+  if (!clause) return '*';
+  const names: string[] = [];
+  if (clause.name) names.push(clause.name.text);
+  if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings)) names.push(`* as ${clause.namedBindings.name.text}`);
+  if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) for (const element of clause.namedBindings.elements) names.push(element.propertyName ? `${element.propertyName.text} as ${element.name.text}` : element.name.text);
+  return names.join(', ');
 }
 
 function directExports(state: FileState, add: (relationship: IndexRelationship) => void): void {
