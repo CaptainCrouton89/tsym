@@ -1,10 +1,12 @@
-import { existsSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readdirSync, statSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { discoverDirectories, type ConfiguredProjects } from '../ts7/projects.js';
 
 export interface WatchBatch {
   fileChanges: { changed?: string[]; created?: string[]; deleted?: string[] } | { invalidateAll: true };
   full: boolean;
+  git: boolean;
 }
 
 export interface IndexWatcher {
@@ -22,6 +24,7 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
   let firstEventAt: number | undefined;
   let invalidated = false;
   let full = false;
+  let git = false;
   const events = new Map<string, FileEvent>();
   let chain = Promise.resolve();
   const debounceMs = configuredDebounceMs();
@@ -47,6 +50,7 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
       if (existsSync(file)) record(file, known ? 'changed' : 'created', configuration || !known);
       else record(file, 'deleted', configuration || known);
     }));
+    watchers.push(...watchGit(root, () => { git = true; invalidate(); }));
   };
 
   function record(file: string, event: FileEvent, requiresFull: boolean): void {
@@ -79,9 +83,11 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
     const batch: WatchBatch = {
       fileChanges: invalidated ? { invalidateAll: true } : { changed: files('changed'), created: files('created'), deleted: files('deleted') },
       full,
+      git,
     };
     invalidated = false;
     full = false;
+    git = false;
     events.clear();
     firstEventAt = undefined;
     chain = chain.then(() => refresh(batch), () => refresh(batch));
@@ -106,6 +112,28 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
 function isDirectory(file: string): boolean {
   try { return statSync(file).isDirectory(); }
   catch { return false; }
+}
+
+function watchGit(root: string, changed: () => void): FSWatcher[] {
+  let gitDir: string;
+  try { gitDir = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
+  catch { return []; }
+  const absolute = path.resolve(root, gitDir);
+  const paths = [path.join(absolute, 'HEAD'), path.join(absolute, 'packed-refs'), ...directories(path.join(absolute, 'refs'))];
+  const watchers: FSWatcher[] = [];
+  for (const target of paths) {
+    if (!existsSync(target)) continue;
+    try { watchers.push(watch(target, changed)); }
+    catch { /* A ref can disappear while its branch changes; the remaining HEAD/ref watchers still trigger. */ }
+  }
+  return watchers;
+}
+
+function directories(root: string): string[] {
+  if (!isDirectory(root)) return [];
+  const result = [root];
+  for (const entry of readdirSync(root, { withFileTypes: true })) if (entry.isDirectory()) result.push(...directories(path.join(root, entry.name)));
+  return result;
 }
 
 function configuredDebounceMs(): number {

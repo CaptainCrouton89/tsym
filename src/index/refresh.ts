@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { loadGraph, replaceFiles, type LoadReceipt, type RelationshipType, type StoreGraph } from '../store/load.js';
+import { metadataFor, writeMetadata } from '../store/meta.js';
 import { Store } from '../store/store.js';
 import { Ts7Host } from '../ts7/api.js';
 import { ConfiguredProjects } from '../ts7/projects.js';
@@ -31,6 +33,7 @@ export function refreshIndex(root: string, program: Ts7Host, projects: Configure
   const full = options.full === true;
   if (full) loadGraph(store, graph);
   else if (changedFiles.length > 0) replaceFiles(store, changedFiles, fileGraph(graph, changedFiles));
+  writeMetadata(store.path, metadataFor(root, projects, headCommit(root)));
 
   let validation: RefreshResult['validation'] = 'off';
   if (options.validate) {
@@ -103,3 +106,8 @@ function normalize(graph: StoreGraph): StoreGraph {
 }
 
 function byJson<T>(left: T, right: T): number { return JSON.stringify(left).localeCompare(JSON.stringify(right)); }
+
+function headCommit(root: string): string {
+  try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
+  catch { return 'unknown'; }
+}

@@ -66,10 +66,22 @@ const commitColumns = ['hash', 'ts', 'author', 'subject'] as const;
 export function loadGraph(store: Store, graph: StoreGraph): LoadReceipt {
   validateGraph(graph);
   return store.transaction(() => {
+    const loaded = withCheckpointHistory(graph, checkpointHistory(store));
     clearGraph(store);
-    copyGraph(store, graph);
-    return receiptFor(graph);
+    copyGraph(store, loaded);
+    return receiptFor(loaded);
   });
+}
+
+/** Rehydrates the persisted graph when an unchanged workspace reuses its store across a resident restart. */
+export function readGraph(store: Store): StoreGraph {
+  const declarations = store.execute('MATCH (d:Declaration) RETURN d.key AS key, d.at AS at, d.name AS name, d.qname AS qname, d.kind AS kind, d.exported AS exported, d.file AS file, d.dir AS dir, d.top AS top, d.line AS line, d.col AS col, d.endLine AS endLine, d.lines AS lines, d.declCount AS declCount, d.container AS container').map((row) => ({
+    key: String(row.key), at: String(row.at), name: String(row.name), qname: String(row.qname), kind: String(row.kind), exported: Boolean(row.exported), file: String(row.file), dir: String(row.dir), top: String(row.top), line: Number(row.line), col: Number(row.col), endLine: Number(row.endLine), lines: Number(row.lines), declCount: Number(row.declCount), container: row.container === null ? null : String(row.container),
+  }));
+  const externals = store.execute('MATCH (e:External) RETURN e.key AS key, e.module AS module, e.name AS name').map((row) => ({ key: String(row.key), module: String(row.module), name: String(row.name) }));
+  const commits = store.execute('MATCH (c:Commit) RETURN c.hash AS hash, c.ts AS ts, c.author AS author, c.subject AS subject').map((row) => ({ hash: String(row.hash), ts: String(row.ts), author: String(row.author), subject: String(row.subject) }));
+  const relationships = relationshipTypes.flatMap((type) => relationshipTargets(type).flatMap((target) => readRelationships(store, type, target)));
+  return { declarations, externals, commits, relationships };
 }
 
 /** Atomically replaces every changed file, so relationships can target declarations created by the same refresh. */
@@ -78,11 +90,13 @@ export function replaceFiles(store: Store, files: readonly string[], graph: Stor
   if (graph.declarations.some((declaration) => !replaced.has(declaration.file))) throw new Error('Replacement graph contains a declaration outside the replaced files.');
   validateGraph(graph);
   return store.transaction(() => {
+    const history = checkpointHistory(store, replaced);
     for (const file of replaced) store.execute(`MATCH (d:Declaration) WHERE d.file = ${literal(file)} DETACH DELETE d`);
     copyRows(store, 'Declaration', declarationColumns, graph.declarations);
     copyMissingExternals(store, graph.externals);
     copyMissingCommits(store, graph.commits ?? []);
     copyRelationships(store, graph.relationships);
+    copyRelationships(store, history.changed.filter((relationship) => graph.declarations.some((declaration) => declaration.key === relationship.to)));
     store.execute('MATCH (e:External) WHERE NOT EXISTS { MATCH (:Declaration)-[]->(e) } DETACH DELETE e');
     return receiptFor(graph);
   });
@@ -104,6 +118,27 @@ function copyGraph(store: Store, graph: StoreGraph): void {
   copyRows(store, 'External', externalColumns, graph.externals);
   copyRows(store, 'Commit', commitColumns, graph.commits ?? []);
   copyRelationships(store, graph.relationships);
+}
+
+interface CheckpointHistory { commits: CommitRow[]; changed: RelationshipRow[]; }
+
+/** Commit checkpoints survive graph replacement when their declaration target still exists. */
+function withCheckpointHistory(graph: StoreGraph, history: CheckpointHistory): StoreGraph {
+  const keys = new Set(graph.declarations.map((declaration) => declaration.key));
+  const commits = new Map((graph.commits ?? []).map((commit) => [commit.hash, commit]));
+  for (const commit of history.commits) commits.set(commit.hash, commit);
+  return {
+    ...graph,
+    commits: [...commits.values()],
+    relationships: [...graph.relationships, ...history.changed.filter((relationship) => keys.has(relationship.to))],
+  };
+}
+
+function checkpointHistory(store: Store, files?: ReadonlySet<string>): CheckpointHistory {
+  const commits = store.execute('MATCH (c:Commit) RETURN c.hash AS hash, c.ts AS ts, c.author AS author, c.subject AS subject').map((row) => ({ hash: String(row.hash), ts: String(row.ts), author: String(row.author), subject: String(row.subject) }));
+  const where = files === undefined ? '' : ` WHERE ${[...files].map((file) => `d.file = ${literal(file)}`).join(' OR ')}`;
+  const changed = store.execute(`MATCH (c:Commit)-[r:CHANGED]->(d:Declaration)${where} RETURN c.hash AS from, d.key AS to, r.added AS added, r.removed AS removed`).map((row) => ({ type: 'CHANGED' as const, from: String(row.from), to: String(row.to), target: 'Declaration' as const, added: Number(row.added), removed: Number(row.removed) }));
+  return { commits, changed };
 }
 
 function copyMissingExternals(store: Store, externals: readonly ExternalRow[]): void {
@@ -174,6 +209,30 @@ function relationshipTargets(type: RelationshipType): readonly RelationshipTarge
 }
 
 const relationshipTypes: readonly RelationshipType[] = ['CONTAINS', 'REFERENCES', 'CALLS', 'IMPLEMENTS', 'EXTENDS', 'TYPE_MENTION', 'IMPORTS', 'EXPORTS', 'CHANGED', 'RENAMED_FROM'];
+
+function readRelationships(store: Store, type: RelationshipType, target: RelationshipTarget): RelationshipRow[] {
+  const source = type === 'CHANGED' ? 'Commit' : 'Declaration';
+  const columns = relationshipColumns(type).filter((column) => column !== 'from' && column !== 'to').map((column) => `r.${column} AS ${column}`).join(', ');
+  const returned = [`a.${type === 'CHANGED' ? 'hash' : 'key'} AS from`, 'b.key AS to', columns].filter(Boolean).join(', ');
+  const rows: ReturnType<Store['execute']> = [];
+  const pageSize = 50_000;
+  for (let offset = 0;; offset += pageSize) {
+    const page = store.execute(`MATCH (a:${source})-[r:${type}]->(b:${target}) RETURN ${returned} SKIP ${offset} LIMIT ${pageSize}`);
+    rows.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return rows.map((row) => {
+    const relationship: RelationshipRow = { type, from: String(row.from), to: String(row.to), target };
+    for (const column of relationshipColumns(type)) {
+      if (column === 'from' || column === 'to' || row[column] === undefined) continue;
+      const value = row[column];
+      if (column === 'line' || column === 'col' || column === 'added' || column === 'removed') Object.assign(relationship, { [column]: Number(value) });
+      else if (column === 'dispatch') Object.assign(relationship, { dispatch: Boolean(value) });
+      else Object.assign(relationship, { [column]: String(value) });
+    }
+    return relationship;
+  });
+}
 
 function validateGraph(graph: StoreGraph): void {
   for (const relationship of graph.relationships) {

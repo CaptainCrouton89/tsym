@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { LbugValue } from '@ladybugdb/core';
 import { pathsForRoot } from '../../server/lifecycle.js';
+import { ingestCommits } from '../../index/commits.js';
 import { query, type QueryParameters } from '../../store/query.js';
 import type { StoreRow } from '../../store/store.js';
 import type { Completion, Invocation, InvocationError } from '../types.js';
@@ -21,6 +22,8 @@ const handler: SemanticHandler = async (context, invocation) => {
   if (invocation.input.flags['--since'] !== undefined) {
     const commits = commitsSince(context.root, invocation.input.flags['--since'] as string);
     if (!Array.isArray(commits)) return commits;
+    if (!context.store) throw new Error('The query leaf requires the resident store and index state.');
+    ingestCommits(context.root, context.store, commits);
     parameters.commits = commits;
   }
 

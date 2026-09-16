@@ -1,6 +1,10 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import * as ts from 'ts5';
 import { STORE_SCHEMA_VERSION } from './schema.js';
+import type { ConfiguredProjects } from '../ts7/projects.js';
 
 export interface IndexedFileMeta {
   size: number;
@@ -19,6 +23,7 @@ export interface StoreMetadata {
 }
 
 const META_FILE = 'meta.json';
+const lockfiles = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock'];
 
 export function metadataPath(storePath: string): string {
   return path.join(storePath, META_FILE);
@@ -39,4 +44,86 @@ export function writeMetadata(storePath: string, metadata: StoreMetadata): void 
   const temporary = `${target}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(metadata)}\n`, { mode: 0o600 });
   renameSync(temporary, target);
+}
+
+/** Captures every input whose change can alter the configured-program graph. */
+export function metadataFor(root: string, projects: ConfiguredProjects, indexedCommit: string, tsVersion = bundledTsVersion()): StoreMetadata {
+  const configs = [...new Set(projects.records().map((project) => path.resolve(project.config)))].sort();
+  const shapeConfigs = inheritedConfigs(configs);
+  const files = [...new Set(projects.records().flatMap((project) => [...project.files]))].sort();
+  return {
+    schemaVersion: STORE_SCHEMA_VERSION,
+    tsVersion,
+    indexedCommit,
+    configSet: configs.map((file) => relative(root, file)),
+    configHashes: Object.fromEntries(shapeConfigs.map((file) => [relative(root, file), hashFile(file)])),
+    packageHash: hashOptional(path.join(root, 'package.json')),
+    lockfileHash: lockfiles.map((name) => `${name}:${hashOptional(path.join(root, name))}`).join('|'),
+    files: Object.fromEntries(files.map((file) => {
+      const stat = statSync(file);
+      return [relative(root, file), { size: stat.size, mtimeMs: stat.mtimeMs }];
+    })),
+  };
+}
+
+/** A persisted store can be rehydrated only when its schema, program shape, and checkpoint still match. */
+export function canReuse(metadata: StoreMetadata | null, expected: StoreMetadata): boolean {
+  return metadata !== null && JSON.stringify(shapeOf(metadata)) === JSON.stringify(shapeOf(expected));
+}
+
+/** Source changes do not invalidate the graph shape; startup rehydrates then performs the ordinary refresh. */
+export function hasSourceDrift(metadata: StoreMetadata, expected: StoreMetadata): boolean {
+  return JSON.stringify(metadata.files) !== JSON.stringify(expected.files);
+}
+
+function shapeOf(metadata: StoreMetadata): Omit<StoreMetadata, 'files'> {
+  const { files: _files, ...shape } = metadata;
+  return shape;
+}
+
+function inheritedConfigs(configs: readonly string[]): string[] {
+  const found = new Set<string>();
+  const visit = (config: string) => {
+    const absolute = path.resolve(config);
+    if (found.has(absolute)) return;
+    found.add(absolute);
+    const result = ts.readConfigFile(absolute, ts.sys.readFile);
+    if (result.error || !result.config || typeof result.config.extends !== 'string') return;
+    const inherited = resolveExtends(absolute, result.config.extends);
+    if (inherited !== undefined) visit(inherited);
+  };
+  for (const config of configs) visit(config);
+  return [...found].sort();
+}
+
+function resolveExtends(config: string, extend: string): string | undefined {
+  if (extend.startsWith('.') || path.isAbsolute(extend)) {
+    const candidate = path.resolve(path.dirname(config), extend);
+    const filename = path.extname(candidate) === '' ? `${candidate}.json` : candidate;
+    try { statSync(filename); return filename; }
+    catch { return undefined; }
+  }
+  const resolved = (ts as typeof ts & { nodeNextJsonConfigResolver: (moduleName: string, containingFile: string, host: ts.ModuleResolutionHost) => { resolvedModule?: { resolvedFileName: string } } }).nodeNextJsonConfigResolver(extend, path.join(path.dirname(config), 'tsconfig.json'), ts.sys).resolvedModule?.resolvedFileName;
+  return resolved === undefined ? undefined : path.resolve(resolved);
+}
+
+function bundledTsVersion(): string {
+  return createRequire(import.meta.url)('typescript/package.json').version as string;
+}
+
+function relative(root: string, file: string): string {
+  const result = path.relative(root, file);
+  return result.startsWith(`..${path.sep}`) || path.isAbsolute(result) ? file : result;
+}
+
+function hashOptional(file: string): string {
+  try { return hashFile(file); }
+  catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '<missing>';
+    throw error;
+  }
+}
+
+function hashFile(file: string): string {
+  return createHash('sha256').update(readFileSync(file)).digest('hex');
 }

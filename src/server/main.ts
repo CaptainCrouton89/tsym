@@ -6,10 +6,12 @@ import { discoverRoot, ensureStateDirectory, idleSeconds, pathsForRoot, publishS
 import { NdjsonReader, WIRE_VERSION, type WireFrame, type WireRequest, writeFrame } from './wire.js';
 import { createSemanticContext } from './context.js';
 import { Ts7ServerDiedError } from '../ts7/api.js';
-import { buildIndex } from '../index/build.js';
+import { buildIndex, reuseIndex } from '../index/build.js';
+import { ingestCommits } from '../index/commits.js';
 import { refreshIndex } from '../index/refresh.js';
 import { IndexStateController } from '../index/state.js';
 import { watchIndex, type IndexWatcher, type WatchBatch } from '../index/watch.js';
+import { canReuse, hasSourceDrift, metadataFor, readMetadata, writeMetadata } from '../store/meta.js';
 import { Store } from '../store/store.js';
 import { executeSemantic } from '../commands/handlers.js';
 import { findNode } from '../commands/tree.js';
@@ -223,7 +225,18 @@ async function main(): Promise<void> {
           // and an edit landing in that window would otherwise never be recorded, publishing a stale index as current.
           // buildIndex is synchronous, so no watch callback can run until index is assigned below.
           watcher = watchIndex(root, projects.configured(), refresh, (error) => append(paths, `index refresh failure: ${safe(error)}`), (flush) => index?.markStale(flush));
-          const built = buildIndex(root, program, projects.configured(), store);
+          const configured = projects.configured();
+          const expected = metadataFor(root, configured, headCommit(root));
+          const metadata = readMetadata(store.path);
+          let built: ReturnType<typeof buildIndex>;
+          if (canReuse(metadata, expected)) {
+            const reused = reuseIndex(store);
+            built = hasSourceDrift(metadata!, expected)
+              ? refreshIndex(root, program, configured, store, reused, { fileChanges: { invalidateAll: true } }).built
+              : reused;
+          } else {
+            built = buildIndex(root, program, configured, store);
+          }
           index = new IndexStateController({ indexedAt: indexedAt(root), state: 'current', built }, (snapshot) => { semantic.index = snapshot; });
           semantic.store = store;
           if (active) sendPhase(active.socket, active.request.requestId, 'index-build-end', remaining(loadDeadlineAt));
@@ -291,11 +304,17 @@ async function main(): Promise<void> {
   const refresh = async (batch: WatchBatch): Promise<void> => {
     if (!store || !index) throw new Error('The index refresh ran before startup completed.');
     await index.rebuild(async () => {
-      const refreshed = refreshIndex(root, program, projects.configured(), store!, index!.current().built, {
+      const configured = projects.configured();
+      const refreshed = refreshIndex(root, program, configured, store!, index!.current().built, {
         fileChanges: batch.fileChanges,
         full: batch.full,
         validate: process.env.TSYM_VALIDATE_INDEX === '1',
       });
+      if (batch.git) {
+        const commit = headCommit(root);
+        ingestCommits(root, store!, [commit]);
+        writeMetadata(store!.path, metadataFor(root, configured, commit));
+      }
       return { indexedAt: indexedAt(root), state: 'current', built: refreshed.built };
     });
     if (batch.full) watcher?.refresh();
@@ -392,10 +411,12 @@ function readsIndex(handler: string | undefined): boolean {
 }
 
 function indexedAt(root: string): string {
-  let commit = 'unknown';
-  try { commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
-  catch { /* A package-only workspace has no commit to name. */ }
-  return `${commit} ${new Date().toISOString()}`;
+  return `${headCommit(root).slice(0, 7)} ${new Date().toISOString()}`;
+}
+
+function headCommit(root: string): string {
+  try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
+  catch { return 'unknown'; }
 }
 
 function residentMemory(tsserverPid: number | undefined): number {
