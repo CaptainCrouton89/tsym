@@ -290,7 +290,11 @@ function declarationNode(state: WalkFileState, descriptor: KeyedDeclaration): De
   const end = state.source.getLineAndCharacterOfPosition(descriptor.end);
   const declaration = state.nodesByStart.get(descriptor.start);
   const kind = declarationKind(descriptor, declaration);
-  const container = descriptor.scope === 'module' ? null : declaration ? ownerForNode(state, declaration.parent).key : `${state.file}#<module>`;
+  const container = descriptor.scope === 'module'
+    ? null
+    : declaration
+      ? parameterPropertyContainer(state, descriptor, declaration)
+      : `${state.file}#<module>`;
   const dir = path.posix.dirname(state.file);
   const segments = state.file.split('/');
   return {
@@ -324,6 +328,7 @@ function declarationKind(descriptor: KeyedDeclaration, node: ts.Node | undefined
     case 'ModuleDeclaration': return 'namespace';
     case 'MethodDeclaration':
     case 'MethodSignature': return 'method';
+    case 'Parameter':
     case 'PropertyDeclaration':
     case 'PropertySignature':
     case 'EnumMember': return 'property';
@@ -333,6 +338,11 @@ function declarationKind(descriptor: KeyedDeclaration, node: ts.Node | undefined
     case 'VariableDeclaration': return variableKind(node);
     default: return descriptor.scope === 'module' ? 'module' : 'property';
   }
+}
+
+function parameterPropertyContainer(state: WalkFileState, descriptor: KeyedDeclaration, declaration: ts.Node): string {
+  if (descriptor.kind === 'Parameter' && ts.isParameterDeclaration(declaration) && ts.isConstructorDeclaration(declaration.parent) && declaration.parent.parent) return ownerForNode(state, declaration.parent.parent).key;
+  return ownerForNode(state, declaration.parent).key;
 }
 
 function variableKind(node: ts.Node | undefined): 'const' | 'let' | 'var' {

@@ -7,10 +7,10 @@ export const shout = (name: string): string => greet(name).toUpperCase();
 
 export class Greeter {
   count = 0;
-  constructor(private prefix: string) {}
+  constructor(private prefix: string, readonly label = 'greeting', plain: number = 0) { void plain; }
   say(name: string): string {
     this.count += 1;
-    return this.prefix + greet(name);
+    return this.prefix + this.label + greet(name);
   }
   static make(): Greeter {
     return new Greeter('> ');

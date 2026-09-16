@@ -84,6 +84,21 @@ test('scope keeps only the approved declaration kinds and anonymous containers w
   for (const key of ['src/scope.ts#outer.parameter', 'src/scope.ts#outer.<anon:2>.inline.<type>.excluded']) assert.ok(!output.includes(key), key);
 });
 
+test('constructor parameter properties are direct class members while plain parameters stay excluded', () => {
+  const file = 'src/parameter-properties.ts';
+  const text = 'class Greeter { constructor(private prefix: string, readonly label = "hello", plain: number = 0) {} }';
+  const declarations = describeFile(file, text);
+  const prefix = declarations.filter((item) => item.key === 'src/parameter-properties.ts#Greeter.prefix');
+  const label = declarations.filter((item) => item.key === 'src/parameter-properties.ts#Greeter.label');
+  assert.equal(prefix.length, 1);
+  assert.equal(label.length, 1);
+  assert.equal(prefix[0]?.scope, 'named-member');
+  assert.equal(prefix[0]?.containerPath, 'Greeter');
+  assert.equal(prefix[0]?.kind, 'Parameter');
+  assert.ok(!declarations.some((item) => item.key === 'src/parameter-properties.ts#Greeter.constructor.prefix'));
+  assert.ok(!keys(file, text).includes('src/parameter-properties.ts#Greeter.constructor.plain'));
+});
+
 test('scope excludes locals in class static blocks and unnamed blocks under named containers', () => {
   const file = 'src/static.ts';
   const text = 'class C { static { const staticLocal = 1; function staticFunction() {} } method() { const methodLocal = 1; } } namespace N { if (true) { const nested = 1; } export const member = 1; }';

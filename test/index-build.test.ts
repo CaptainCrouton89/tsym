@@ -30,6 +30,10 @@ function invokeConcrete(value: Worker): void { value.work(); }
 export
   async function spread(): Promise<void> {
 }
+class ParameterProperties {
+  constructor(private prefix: string, readonly label = 'label', plain: number = 0) { void plain; }
+  format(): string { return this.prefix + this.label; }
+}
 `);
   return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
@@ -52,6 +56,10 @@ test('build persists heritage edges, dispatch calls, and a null module container
     assert.equal(query(store, 'MATCH (:Declaration)-[r:IMPORTS]->() RETURN r.names AS names')[0]?.names, 'one, two as second');
     const spread = query(store, "MATCH (d:Declaration {name: 'spread'}) RETURN d.line AS line, d.endLine AS endLine, d.lines AS lines")[0]!;
     assert.deepEqual(spread, { line: 15, endLine: 16, lines: 3 });
+    const prefix = query(store, "MATCH (c:Declaration {key: 'src/index.ts#ParameterProperties'})-[:CONTAINS]->(p:Declaration {key: 'src/index.ts#ParameterProperties.prefix'}) RETURN p.kind AS kind, p.container AS container")[0];
+    assert.deepEqual(prefix, { kind: 'property', container: 'src/index.ts#ParameterProperties' });
+    assert.equal(query(store, "MATCH (:Declaration)-[r:REFERENCES]->(:Declaration {key: 'src/index.ts#ParameterProperties.prefix'}) RETURN count(r) AS count")[0]?.count, 2);
+    assert.equal(query(store, "MATCH (:Declaration {key: 'src/index.ts#ParameterProperties.plain'}) RETURN count(*) AS count")[0]?.count, 0);
   } finally {
     store.close();
     program.close();

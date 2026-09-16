@@ -20,10 +20,14 @@ test('outline, find, and show use the resident compiler without opening outline 
     assert.equal(rows(outline.stdout).length, 6);
     assert.doesNotMatch(outline.stdout, /alias/);
     assert.match(outline.stdout, /src\/greet\.ts:2:17  function  export  greet  \(3L\)/);
-    assert.match(outline.stdout, /Greeter  \(11L, 4 members\)/);
+    assert.match(outline.stdout, /Greeter  \(11L, 6 members\)/);
 
     const members = run(root, cache, 'outline', 'src/greet.ts', '--members');
-    assert.equal(rows(members.stdout).length, 14);
+    assert.equal(rows(members.stdout).length, 16);
+    assert.match(members.stdout, /Greeter  \(11L, 6 members\)/);
+    assert.match(members.stdout, /property  Greeter\.prefix/);
+    assert.match(members.stdout, /property  Greeter\.label/);
+    assert.doesNotMatch(members.stdout, /Greeter\.plain/);
     assert.match(members.stdout, /Greeter\.say/);
 
     const directory = run(root, cache, 'outline', 'src', '--depth', '1');
@@ -40,6 +44,8 @@ test('outline, find, and show use the resident compiler without opening outline 
     assert.match(reexport.stdout, /alias  export  hello/);
     const member = run(root, cache, 'find', 'Greeter.say');
     assert.match(member.stdout, /Greeter\.say/);
+    const parameterProperty = run(root, cache, 'find', 'Greeter.prefix');
+    assert.match(parameterProperty.stdout, /property  Greeter\.prefix/);
     const missed = run(root, cache, 'find', 'doesNotExist');
     assert.equal(missed.status, 1);
     assert.match(missed.stdout, /<find name="doesNotExist" count="0"\/>/);
@@ -56,6 +62,9 @@ test('outline, find, and show use the resident compiler without opening outline 
 
     const memberSource = run(root, cache, 'show', 'Greeter.say');
     assert.match(memberSource.stdout, /say\(name: string\): string/);
+    const parameterPropertySource = run(root, cache, 'show', 'Greeter.prefix');
+    assert.match(parameterPropertySource.stdout, /name="prefix" kind="property"/);
+    assert.match(parameterPropertySource.stdout, /constructor\(private prefix: string, readonly label = 'greeting', plain: number = 0\)/);
     const invalidAddress = run(root, cache, 'show', 'src/greet.ts:7:14');
     assert.equal(invalidAddress.status, 2);
     assert.match(invalidAddress.stdout, /code="invalid-address"/);

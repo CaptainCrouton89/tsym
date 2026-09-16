@@ -134,8 +134,8 @@ export function describeSourceFile(source: ts.SourceFile, file = source.fileName
     let childPath = path;
     let pushed = false;
     let scope: DescriptorScope = 'other';
-    const push = (segment: string, nextScope: DescriptorScope): void => {
-      childPath = record(node, segment, path, nextScope);
+    const push = (segment: string, nextScope: DescriptorScope, containerPath = path): void => {
+      childPath = record(node, segment, containerPath, nextScope);
       scope = nextScope;
       pushed = true;
     };
@@ -149,7 +149,8 @@ export function describeSourceFile(source: ts.SourceFile, file = source.fileName
     } else if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) {
       push(node.name.text, 'excluded');
     } else if (ts.isParameter(node) && ts.isIdentifier(node.name)) {
-      push(node.name.text, 'excluded');
+      if (ts.isParameterPropertyDeclaration(node, node.parent)) push(node.name.text, 'named-member', path.slice(0, -1));
+      else push(node.name.text, 'excluded');
     } else if (ts.isTypeParameterDeclaration(node)) {
       push(node.name.text, 'excluded');
     } else if (ts.isMethodDeclaration(node) || ts.isMethodSignature(node) || ts.isPropertyDeclaration(node) || ts.isPropertySignature(node) || ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node) || ts.isEnumMember(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) {

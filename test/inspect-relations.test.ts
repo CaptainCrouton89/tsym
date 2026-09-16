@@ -23,6 +23,11 @@ test('inspect owns calls in function expression contexts and excludes concrete d
       assert.match(result.stdout, new RegExp(callee));
     }
 
+    const parameterProperty = run('inspect', 'Greeter.prefix', '--only', 'refs', '--each', '0');
+    assert.equal(parameterProperty.status, 0, `${parameterProperty.stdout}\n${parameterProperty.stderr}`);
+    assert.match(parameterProperty.stdout, /<refs count="2" files="1">/);
+    assert.match(parameterProperty.stdout, /Greeter\.say  read/);
+
     const concrete = run('inspect', 'constInitializerOwner', '--only', 'impl', '--each', '0');
     assert.equal(concrete.status, 1, `${concrete.stdout}\n${concrete.stderr}`);
     assert.match(concrete.stdout, /<impl count="0"\/>/);

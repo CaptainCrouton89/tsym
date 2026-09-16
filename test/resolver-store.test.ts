@@ -62,7 +62,7 @@ test('outline, find, and show read the fixture index and source spans', async ()
   try {
     const outlined = await outline(context, invocation(context.root, 'outline', ['src/greet.ts']));
     assert.match(outlined.data.text ?? '', /src\/greet\.ts:2:17  function  export  greet  \(3L\)/);
-    assert.match(outlined.data.text ?? '', /Greeter  \(11L, 4 members\)/);
+    assert.match(outlined.data.text ?? '', /Greeter  \(11L, 6 members\)/);
     const withImports = await outline(context, invocation(context.root, 'outline', ['src/app.ts'], { '--imports': true }));
     assert.match(withImports.data.text ?? '', /src\/app\.ts:1:1  import  greet, Greeter, shout, Named  src\/greet\.ts/);
     const found = await find(context, invocation(context.root, 'find', ['hello']));
