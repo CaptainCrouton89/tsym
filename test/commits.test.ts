@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -16,7 +16,8 @@ import { watchIndex, type WatchBatch } from '../src/index/watch.js';
 
 interface Fixture {
   root: string;
-  write(text: string): void;
+  write(text: string, file?: string): void;
+  move(from: string, to: string): void;
   commit(subject: string): string;
   load(): Store;
   cleanup(): void;
@@ -27,10 +28,11 @@ function fixture(initial: string): Fixture {
   exec(root, ['init']);
   exec(root, ['config', 'user.name', 'Test']);
   exec(root, ['config', 'user.email', 'test@example.com']);
-  writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'ES2022' }, include: ['source.ts'] }));
+  writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'ES2022' }, include: ['**/*.ts'] }));
   writeFileSync(path.join(root, 'package.json'), '{"name":"fixture"}\n');
   writeFileSync(path.join(root, 'package-lock.json'), '{"lockfileVersion":3}\n');
-  const write = (text: string) => writeFileSync(path.join(root, 'source.ts'), text);
+  const write = (text: string, file = 'source.ts') => writeFileSync(path.join(root, file), text);
+  const move = (from: string, to: string) => renameSync(path.join(root, from), path.join(root, to));
   write(initial);
   const commit = (subject: string) => {
     exec(root, ['add', '.']);
@@ -39,31 +41,33 @@ function fixture(initial: string): Fixture {
   };
   const load = () => {
     const store = new Store(path.join(root, 'store'));
-    const text = readFileSync(path.join(root, 'source.ts'), 'utf8');
-    const declarations = describeFile('source.ts', text).filter((declaration) => declaration.scope !== 'excluded').map((declaration) => rowFor(text, declaration));
+    const declarations = readdirSync(root).filter((file) => file.endsWith('.ts')).sort().flatMap((file) => {
+      const text = readFileSync(path.join(root, file), 'utf8');
+      return describeFile(file, text).filter((declaration) => declaration.scope !== 'excluded').map((declaration) => rowFor(text, declaration, file));
+    });
     loadGraph(store, { declarations, externals: [], relationships: [] });
     return store;
   };
-  return { root, write, commit, load, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, write, move, commit, load, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-function rowFor(text: string, declaration: ReturnType<typeof describeFile>[number]): DeclarationRow {
+function rowFor(text: string, declaration: ReturnType<typeof describeFile>[number], file = 'source.ts'): DeclarationRow {
   const lines = text.slice(declaration.start, declaration.end).split('\n').length;
   const beforeName = text.slice(0, declaration.nameStart);
   const line = declaration.name === '<module>' ? 0 : beforeName.split('\n').length;
   const col = declaration.name === '<module>' ? 0 : beforeName.length - beforeName.lastIndexOf('\n');
   const endLine = text.slice(0, declaration.end).split('\n').length;
-  const container = declaration.containerPath === '' ? null : `source.ts#${declaration.containerPath}`;
+  const container = declaration.containerPath === '' ? null : `${file}#${declaration.containerPath}`;
   return {
     key: declaration.key,
-    at: declaration.name === '<module>' ? 'source.ts:0:0' : `source.ts:${line}:${col}`,
+    at: declaration.name === '<module>' ? `${file}:0:0` : `${file}:${line}:${col}`,
     name: declaration.name,
     qname: declaration.path,
     kind: declaration.name === '<module>' ? 'module' : 'function',
     exported: declaration.name !== '<module>',
-    file: 'source.ts',
+    file,
     dir: '',
-    top: 'source.ts',
+    top: file,
     line,
     col,
     endLine,
@@ -75,6 +79,10 @@ function rowFor(text: string, declaration: ReturnType<typeof describeFile>[numbe
 
 function changed(store: Store): { key: string; added: number; removed: number }[] {
   return query(store, 'MATCH (:Commit)-[r:CHANGED]->(d:Declaration) RETURN d.key AS key, r.added AS added, r.removed AS removed ORDER BY key') as { key: string; added: number; removed: number }[];
+}
+
+function renamed(store: Store): { key: string; oldKey: string; basis: string; hash: string }[] {
+  return query(store, 'MATCH (d:Declaration)-[r:RENAMED_FROM]->(c:Commit) RETURN d.key AS key, r.oldKey AS oldKey, r.basis AS basis, c.hash AS hash ORDER BY key') as { key: string; oldKey: string; basis: string; hash: string }[];
 }
 
 function git(root: string, args: string[]): string { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }); }
@@ -134,6 +142,53 @@ test('does not recreate a wholly deleted declaration', () => {
     try {
       ingestCommits(subject.root, store, [hash]);
       assert.equal(query(store, "MATCH (:Commit)-[:CHANGED]->(d:Declaration) WHERE d.key = 'source.ts#gone' RETURN d.key").length, 0);
+    } finally { store.close(); }
+  } finally { subject.cleanup(); }
+});
+
+test('persists text-identical rename candidates without recreating the old declaration', () => {
+  const subject = fixture('take(() => leaf());\n');
+  try {
+    subject.commit('initial');
+    subject.write('other(() => leaf());\n');
+    const hash = subject.commit('rename call anchor');
+    const store = subject.load();
+    try {
+      assert.deepEqual(ingestCommits(subject.root, store, [hash]).renamed, [{ from: 'source.ts#<other#arg1:1>', oldKey: 'source.ts#<take#arg1:1>', basis: 'text-identical', commit: hash }]);
+      assert.deepEqual(renamed(store), [{ key: 'source.ts#<other#arg1:1>', oldKey: 'source.ts#<take#arg1:1>', basis: 'text-identical', hash }]);
+      assert.equal(query(store, "MATCH (d:Declaration) WHERE d.key = 'source.ts#<take#arg1:1>' RETURN d.key").length, 0);
+      assert.deepEqual(ingestCommits(subject.root, store, [hash]).commits, [], 're-ingestion is idempotent');
+      assert.deepEqual(renamed(store), [{ key: 'source.ts#<other#arg1:1>', oldKey: 'source.ts#<take#arg1:1>', basis: 'text-identical', hash }]);
+    } finally { store.close(); }
+  } finally { subject.cleanup(); }
+});
+
+test('persists container-renamed candidates without recreating the old declaration', () => {
+  const subject = fixture('export namespace Old { export function same() {} }\n');
+  try {
+    subject.commit('initial');
+    subject.write('export namespace New { export function same() {} }\n');
+    const hash = subject.commit('rename container');
+    const store = subject.load();
+    try {
+      ingestCommits(subject.root, store, [hash]);
+      assert.deepEqual(renamed(store), [{ key: 'source.ts#New.same', oldKey: 'source.ts#Old.same', basis: 'container-renamed', hash }]);
+      assert.equal(query(store, "MATCH (d:Declaration) WHERE d.key = 'source.ts#Old.same' RETURN d.key").length, 0);
+    } finally { store.close(); }
+  } finally { subject.cleanup(); }
+});
+
+test('persists file-moved candidates without recreating the old declaration', () => {
+  const subject = fixture('export function moved() {}\n');
+  try {
+    subject.commit('initial');
+    subject.move('source.ts', 'moved.ts');
+    const hash = subject.commit('move file');
+    const store = subject.load();
+    try {
+      ingestCommits(subject.root, store, [hash]);
+      assert.deepEqual(renamed(store), [{ key: 'moved.ts#moved', oldKey: 'source.ts#moved', basis: 'file-moved', hash }]);
+      assert.equal(query(store, "MATCH (d:Declaration) WHERE d.key = 'source.ts#moved' RETURN d.key").length, 0);
     } finally { store.close(); }
   } finally { subject.cleanup(); }
 });

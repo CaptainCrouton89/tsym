@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { loadGraph, replaceFile, replaceFiles, type DeclarationRow, type RelationshipRow, type StoreGraph } from '../src/store/load.js';
+import { loadGraph, readGraph, replaceFile, replaceFiles, type DeclarationRow, type RelationshipRow, type StoreGraph } from '../src/store/load.js';
 import { readMetadata, writeMetadata } from '../src/store/meta.js';
 import { query } from '../src/store/query.js';
 import { STORE_SCHEMA_VERSION } from '../src/store/schema.js';
@@ -65,7 +65,7 @@ test('schema supports every relationship and pair-qualified COPY', () => {
         { type: 'IMPORTS', from: 'src/file.ts#one', to: 'node:fs#readFile', target: 'External', line: 8, names: 'readFile' },
         { type: 'EXPORTS', from: 'src/file.ts#one', to: 'src/file.ts#two', target: 'Declaration', name: 'two', line: 9, col: 1 },
         { type: 'CHANGED', from: 'abc', to: 'src/file.ts#one', target: 'Declaration', added: 1, removed: 0 },
-        { type: 'RENAMED_FROM', from: 'src/file.ts#one', to: 'src/file.ts#two', target: 'Declaration', basis: 'text-identical', commit: 'abc' },
+        { type: 'RENAMED_FROM', from: 'src/file.ts#one', to: 'abc', target: 'Commit', oldKey: 'src/file.ts#old', basis: 'text-identical' },
       ],
     };
     const receipt = loadGraph(store, graph);
@@ -74,6 +74,8 @@ test('schema supports every relationship and pair-qualified COPY', () => {
     assert.equal(query(store, 'MATCH (:Declaration)-[r:REFERENCES]->(:External) RETURN count(r) AS count')[0].count, 1);
     assert.equal(query(store, 'MATCH (:Declaration)-[r:CALLS]->(:External) RETURN count(r) AS count')[0].count, 1);
     assert.equal(query(store, 'MATCH (:Commit)-[r:CHANGED]->(:Declaration) RETURN count(r) AS count')[0].count, 1);
+    assert.deepEqual(query(store, 'MATCH (d:Declaration)-[r:RENAMED_FROM]->(c:Commit) RETURN d.key AS key, r.oldKey AS oldKey, r.basis AS basis, c.hash AS hash'), [{ key: 'src/file.ts#one', oldKey: 'src/file.ts#old', basis: 'text-identical', hash: 'abc' }]);
+    assert.deepEqual(readGraph(store).relationships.filter((relationship) => relationship.type === 'RENAMED_FROM'), [{ type: 'RENAMED_FROM', from: 'src/file.ts#one', to: 'abc', target: 'Commit', oldKey: 'src/file.ts#old', basis: 'text-identical' }]);
   } finally {
     store.close();
     remove(temp.root);
@@ -181,6 +183,25 @@ test('one commit can be attached as changed files are replaced', () => {
     replaceFile(store, 'src/a.ts', { declarations: [declaration('src/a.ts#next', 'src/a.ts')], externals: [], commits: [commit], relationships: [{ type: 'CHANGED', from: 'abc', to: 'src/a.ts#next', target: 'Declaration', added: 1, removed: 0 }] });
     replaceFile(store, 'src/b.ts', { declarations: [declaration('src/b.ts#next', 'src/b.ts')], externals: [], commits: [commit], relationships: [{ type: 'CHANGED', from: 'abc', to: 'src/b.ts#next', target: 'Declaration', added: 1, removed: 0 }] });
     assert.equal(query(store, 'MATCH (:Commit)-[r:CHANGED]->(:Declaration) RETURN count(r) AS count')[0].count, 2);
+  } finally {
+    store.close();
+    remove(temp.root);
+  }
+});
+
+test('replaces a file without dropping persisted rename continuity for declarations that remain', () => {
+  const temp = temporaryStore();
+  const store = new Store(temp.path);
+  const commit = { hash: 'abc', ts: '2026-01-01T00:00:00Z', author: 'A', subject: 'rename' };
+  try {
+    loadGraph(store, {
+      declarations: [declaration('src/a.ts#current', 'src/a.ts')],
+      externals: [],
+      commits: [commit],
+      relationships: [{ type: 'RENAMED_FROM', from: 'src/a.ts#current', to: 'abc', target: 'Commit', oldKey: 'src/a.ts#old', basis: 'text-identical' }],
+    });
+    replaceFile(store, 'src/a.ts', { declarations: [declaration('src/a.ts#current', 'src/a.ts')], externals: [], relationships: [] });
+    assert.deepEqual(query(store, 'MATCH (d:Declaration)-[r:RENAMED_FROM]->(c:Commit) RETURN d.key AS key, r.oldKey AS oldKey, r.basis AS basis, c.hash AS hash'), [{ key: 'src/a.ts#current', oldKey: 'src/a.ts#old', basis: 'text-identical', hash: 'abc' }]);
   } finally {
     store.close();
     remove(temp.root);

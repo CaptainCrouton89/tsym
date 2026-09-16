@@ -40,6 +40,14 @@ export function ingestCommits(root: string, store: Store, hashes: readonly strin
           removed: relationship.removed ?? 0,
         });
       }
+      for (const candidate of ingestion.renamed) {
+        store.execute('MATCH (d:Declaration), (c:Commit) WHERE d.key = $from AND c.hash = $commit CREATE (d)-[:RENAMED_FROM {oldKey: $oldKey, basis: $basis}]->(c)', {
+          from: candidate.from,
+          commit: candidate.commit,
+          oldKey: candidate.oldKey,
+          basis: candidate.basis,
+        });
+      }
     });
     commits.push(hash);
     changed.push(...ingestion.changed);
@@ -51,12 +59,15 @@ export function ingestCommits(root: string, store: Store, hashes: readonly strin
 function ingestCommit(root: string, hash: string, current: ReadonlyMap<string, CurrentDeclaration>): Omit<CommitIngestion, 'commits'> {
   const parent = parentOf(root, hash);
   const changed = new Map<string, { added: number; removed: number }>();
-  const renamed: RenameCandidate[] = [];
+  const beforeForRename: BlobDeclaration[] = [];
+  const afterForRename: BlobDeclaration[] = [];
   for (const file of touchedFiles(root, parent, hash)) {
     if (!isSourceFile(file)) continue;
-    const afterBlob = cleanAtCommit(root, hash, file) ? undefined : descriptorsAt(root, hash, file);
-    const after: readonly SpanDeclaration[] = afterBlob ?? currentSpans(current, file);
+    const committed = descriptorsAt(root, hash, file);
+    const after: readonly SpanDeclaration[] = cleanAtCommit(root, hash, file) ? currentSpans(current, file) : committed;
     const before = parent === undefined ? [] : descriptorsAt(root, parent, file);
+    beforeForRename.push(...before);
+    afterForRename.push(...committed);
     const afterIndexed = after.filter((declaration) => current.has(declaration.key));
     const beforeByKey = new Map(before.map((declaration) => [declaration.key, declaration]));
     for (const hunk of hunksFor(root, parent, hash, file)) {
@@ -75,11 +86,10 @@ function ingestCommit(root: string, hash: string, current: ReadonlyMap<string, C
         add(changed, target.key, intersection(target.startLine, target.endLine, hunk.newStart, hunk.newStart + hunk.newLines - 1), removed);
       }
     }
-    if (afterBlob !== undefined) renamed.push(...renameCandidates(hash, before, afterBlob, current));
   }
   return {
     changed: [...changed].map(([to, counts]) => ({ type: 'CHANGED', from: hash, to, target: 'Declaration', ...counts })),
-    renamed,
+    renamed: renameCandidates(hash, beforeForRename, afterForRename, current),
   };
 }
 
@@ -105,7 +115,7 @@ function parentOf(root: string, hash: string): string | undefined {
 function touchedFiles(root: string, parent: string | undefined, hash: string): string[] {
   const args = parent === undefined
     ? ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', hash]
-    : ['diff', '--name-only', parent, hash];
+    : ['diff', '--no-renames', '--name-only', parent, hash];
   return git(root, args).split('\n').filter(Boolean);
 }
 
@@ -165,7 +175,6 @@ function innermost<T extends SpanDeclaration>(declarations: readonly T[]): T {
   return [...declarations].sort((left, right) => (left.endLine - left.startLine) - (right.endLine - right.startLine) || left.key.localeCompare(right.key))[0]!;
 }
 
-/** Candidates retain the vanished key until the approved schema can represent it. They are intentionally not persisted yet. */
 function renameCandidates(commit: string, before: readonly BlobDeclaration[], after: readonly BlobDeclaration[], current: ReadonlyMap<string, CurrentDeclaration>): RenameCandidate[] {
   const oldByText = new Map<string, BlobDeclaration[]>();
   for (const declaration of before) {

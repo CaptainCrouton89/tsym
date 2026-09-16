@@ -50,7 +50,7 @@ Every configured file contributes a module Declaration at path:0:0. Nothing unde
 
 <relationships>
 Compiler-resolved: (d)-[:CONTAINS]->(member); (d)-[:REFERENCES {line,col,role}]->(target), role definition|call|import|type|write|read; (d)-[:CALLS {line,col,dispatch}]->(target); (d)-[:IMPLEMENTS]->(target); (d)-[:EXTENDS]->(base); (d)-[:TYPE_MENTION {line,col,position}]->(type); (module)-[:IMPORTS {line,names}]->(module|External); (module)-[:EXPORTS {name,line,col}]->(d); (c:Commit {hash,ts,author,subject})-[:CHANGED {added,removed}]->(d).
-Inferred: (d)-[:RENAMED_FROM {basis,commit}]->(old), basis text-identical | container-renamed | file-moved.
+Inferred: (new:Declaration)-[:RENAMED_FROM {oldKey,basis}]->(c:Commit), basis text-identical | container-renamed | file-moved.
 Excluded internal declaration occurrences are counted as internal sites, not stored. Every stored call occurrence is both a CALLS and REFERENCES edge at the same address. A dispatch call targets an interface or abstract member with dispatch=true; concrete members are <-[:IMPLEMENTS]-. IMPLEMENTS is heritage-based; structural object-literal satisfaction is not an edge. The graph holds one revision: the working tree.
 </relationships>
 

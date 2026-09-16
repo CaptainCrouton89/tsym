@@ -25,7 +25,7 @@ export interface ExternalRow { key: string; module: string; name: string; }
 export interface CommitRow { hash: string; ts: string; author: string; subject: string; }
 
 export type RelationshipType = 'CONTAINS' | 'REFERENCES' | 'CALLS' | 'IMPLEMENTS' | 'EXTENDS' | 'TYPE_MENTION' | 'IMPORTS' | 'EXPORTS' | 'CHANGED' | 'RENAMED_FROM';
-export type RelationshipTarget = 'Declaration' | 'External';
+export type RelationshipTarget = 'Declaration' | 'External' | 'Commit';
 
 export interface RelationshipRow {
   type: RelationshipType;
@@ -41,8 +41,8 @@ export interface RelationshipRow {
   name?: string;
   added?: number;
   removed?: number;
+  oldKey?: string;
   basis?: 'text-identical' | 'container-renamed' | 'file-moved';
-  commit?: string;
 }
 
 export interface StoreGraph {
@@ -97,6 +97,7 @@ export function replaceFiles(store: Store, files: readonly string[], graph: Stor
     copyMissingCommits(store, graph.commits ?? []);
     copyRelationships(store, graph.relationships);
     copyRelationships(store, history.changed.filter((relationship) => graph.declarations.some((declaration) => declaration.key === relationship.to)));
+    copyRelationships(store, history.renamed.filter((relationship) => graph.declarations.some((declaration) => declaration.key === relationship.from)));
     store.execute('MATCH (e:External) WHERE NOT EXISTS { MATCH (:Declaration)-[]->(e) } DETACH DELETE e');
     return receiptFor(graph);
   });
@@ -120,7 +121,7 @@ function copyGraph(store: Store, graph: StoreGraph): void {
   copyRelationships(store, graph.relationships);
 }
 
-interface CheckpointHistory { commits: CommitRow[]; changed: RelationshipRow[]; }
+interface CheckpointHistory { commits: CommitRow[]; changed: RelationshipRow[]; renamed: RelationshipRow[]; }
 
 /** Commit checkpoints survive graph replacement when their declaration target still exists. */
 function withCheckpointHistory(graph: StoreGraph, history: CheckpointHistory): StoreGraph {
@@ -130,7 +131,7 @@ function withCheckpointHistory(graph: StoreGraph, history: CheckpointHistory): S
   return {
     ...graph,
     commits: [...commits.values()],
-    relationships: [...graph.relationships, ...history.changed.filter((relationship) => keys.has(relationship.to))],
+    relationships: [...graph.relationships, ...history.changed.filter((relationship) => keys.has(relationship.to)), ...history.renamed.filter((relationship) => keys.has(relationship.from))],
   };
 }
 
@@ -138,7 +139,8 @@ function checkpointHistory(store: Store, files?: ReadonlySet<string>): Checkpoin
   const commits = store.execute('MATCH (c:Commit) RETURN c.hash AS hash, c.ts AS ts, c.author AS author, c.subject AS subject').map((row) => ({ hash: String(row.hash), ts: String(row.ts), author: String(row.author), subject: String(row.subject) }));
   const where = files === undefined ? '' : ` WHERE ${[...files].map((file) => `d.file = ${literal(file)}`).join(' OR ')}`;
   const changed = store.execute(`MATCH (c:Commit)-[r:CHANGED]->(d:Declaration)${where} RETURN c.hash AS from, d.key AS to, r.added AS added, r.removed AS removed`).map((row) => ({ type: 'CHANGED' as const, from: String(row.from), to: String(row.to), target: 'Declaration' as const, added: Number(row.added), removed: Number(row.removed) }));
-  return { commits, changed };
+  const renamed = store.execute(`MATCH (d:Declaration)-[r:RENAMED_FROM]->(c:Commit)${where} RETURN d.key AS from, c.hash AS to, r.oldKey AS oldKey, r.basis AS basis`).map((row) => ({ type: 'RENAMED_FROM' as const, from: String(row.from), to: String(row.to), target: 'Commit' as const, oldKey: String(row.oldKey), basis: String(row.basis) as RelationshipRow['basis'] }));
+  return { commits, changed, renamed };
 }
 
 function copyMissingExternals(store: Store, externals: readonly ExternalRow[]): void {
@@ -197,13 +199,14 @@ function relationshipColumns(type: RelationshipType): readonly string[] {
     case 'IMPORTS': return ['from', 'to', 'line', 'names'];
     case 'EXPORTS': return ['from', 'to', 'name', 'line', 'col'];
     case 'CHANGED': return ['from', 'to', 'added', 'removed'];
-    case 'RENAMED_FROM': return ['from', 'to', 'basis', 'commit'];
+    case 'RENAMED_FROM': return ['from', 'to', 'oldKey', 'basis'];
   }
 }
 
 function relationshipTargets(type: RelationshipType): readonly RelationshipTarget[] {
   switch (type) {
     case 'REFERENCES': case 'CALLS': case 'TYPE_MENTION': case 'IMPORTS': return ['Declaration', 'External'];
+    case 'RENAMED_FROM': return ['Commit'];
     default: return ['Declaration'];
   }
 }
@@ -213,7 +216,7 @@ const relationshipTypes: readonly RelationshipType[] = ['CONTAINS', 'REFERENCES'
 function readRelationships(store: Store, type: RelationshipType, target: RelationshipTarget): RelationshipRow[] {
   const source = type === 'CHANGED' ? 'Commit' : 'Declaration';
   const columns = relationshipColumns(type).filter((column) => column !== 'from' && column !== 'to').map((column) => `r.${column} AS ${column}`).join(', ');
-  const returned = [`a.${type === 'CHANGED' ? 'hash' : 'key'} AS from`, 'b.key AS to', columns].filter(Boolean).join(', ');
+  const returned = [`a.${type === 'CHANGED' ? 'hash' : 'key'} AS from`, `b.${target === 'Commit' ? 'hash' : 'key'} AS to`, columns].filter(Boolean).join(', ');
   const rows: ReturnType<Store['execute']> = [];
   const pageSize = 50_000;
   for (let offset = 0;; offset += pageSize) {
@@ -238,6 +241,7 @@ function validateGraph(graph: StoreGraph): void {
   for (const relationship of graph.relationships) {
     if (!relationshipTargets(relationship.type).includes(relationship.target)) throw new Error(`${relationship.type} cannot target ${relationship.target}.`);
     if (relationship.type === 'CHANGED' && relationship.target !== 'Declaration') throw new Error('CHANGED must target a Declaration.');
+    if (relationship.type === 'RENAMED_FROM' && relationship.target !== 'Commit') throw new Error('RENAMED_FROM must target a Commit.');
   }
 }
 
