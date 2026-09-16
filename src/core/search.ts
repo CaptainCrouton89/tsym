@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { findInFiles, Lang } from '@ast-grep/napi';
 import type { PathFilters } from './receipt.js';
 import { langFor, matchesGlob, type Workspace } from './workspace.js';
@@ -25,7 +26,7 @@ export async function search(ws: Workspace, pattern: string, opts: SearchOptions
   const byLang = new Map<Lang, string[]>();
   for (const file of ws.files()) {
     const lang = langFor(file);
-    if (lang !== null) (byLang.get(lang) ?? byLang.set(lang, []).get(lang)!).push(ws.abs(file));
+    if (lang !== null) (byLang.get(lang) ?? byLang.set(lang, []).get(lang)!).push(path.join(ws.root, file));
   }
   const matches: SearchMatch[] = [];
   for (const [lang, paths] of byLang) {

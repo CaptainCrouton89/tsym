@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { Lang } from '@ast-grep/napi';
 
@@ -26,17 +26,6 @@ export class Workspace {
   /** Path relative to the root, `/`-separated. */
   rel(abs: string): string {
     return path.relative(this.root, abs).split(path.sep).join('/');
-  }
-
-  /** Absolute path for an input path: absolute as-is; relative first against the process cwd, then against the root. */
-  abs(p: string): string {
-    if (path.isAbsolute(p)) return p;
-    const fromCwd = path.resolve(p);
-    return existsSync(fromCwd) ? fromCwd : path.join(this.root, p);
-  }
-
-  read(rel: string): string {
-    return readFileSync(this.abs(rel), 'utf8');
   }
 
   /**
