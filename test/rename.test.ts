@@ -106,6 +106,31 @@ test('rename apply removes staged files after preparation and commit failures an
   }
 });
 
+test('rename apply preserves exact restore paths when restoration fails', async () => {
+  const fixture = copiedFixture();
+  try {
+    const plan = testPlan(fixture.root, ['src/rename-shorthand.ts', 'src/rename-string-literal.ts']);
+    const base: RenameFileOperations = { readFile, writeFile, rename, rm, stat, chmod };
+    let commits = 0;
+    const result = await applyRenamePlan(plan, {
+      ...base,
+      rename: async (from, to) => {
+        if (String(from).endsWith('.new')) {
+          commits++;
+          if (commits === 2) throw new Error('injected commit failure');
+        }
+        if (String(from).endsWith('.restore')) throw new Error('injected restoration failure');
+        await rename(from, to);
+      },
+    });
+    assert.equal('category' in result && result.code, 'rename-rollback-failed');
+    assert.ok('category' in result && result.received?.endsWith('.restore'));
+    assert.ok('category' in result && result.received && readdirSync(path.dirname(result.received)).includes(path.basename(result.received)));
+  } finally {
+    fixture.close();
+  }
+});
+
 function testPlan(root: string, paths: readonly string[]): RenamePlan {
   return {
     root,
