@@ -69,6 +69,14 @@ test('outline, find, and show use the resident compiler without opening outline 
     const other = run(root, cache, 'show', 'src/read-leaf-nested.ts:2:25');
     assert.match(other.stdout, /export const multi = 1, other = 2;/);
 
+    const fromSubdirectory = runFrom(path.join(root, 'src'), root, cache, 'outline', 'greet.ts');
+    assert.equal(fromSubdirectory.status, 0, 'operands resolve from the client cwd');
+    assert.equal(rows(fromSubdirectory.stdout).length, 6);
+    assert.match(fromSubdirectory.stdout, /src\/greet\.ts:2:17  function  export  greet/);
+    const globFromSubdirectory = runFrom(path.join(root, 'src'), root, cache, 'outline', 'gre*.ts');
+    assert.equal(globFromSubdirectory.status, 0, globFromSubdirectory.stderr);
+    assert.match(globFromSubdirectory.stdout, /<outline path="gre\*\.ts" depth="1" symbols="6" files="1">/);
+
     const outside = run(root, cache, 'outline', 'missing.ts');
     assert.equal(outside.status, 2);
     assert.match(outside.stderr, /<error code="no-such-path">/);
@@ -92,10 +100,14 @@ test('outline, find, and show use the resident compiler without opening outline 
   }
 });
 
-function run(root: string, cache: string, ...args: string[]): Run {
+const cli = path.resolve('dist/cli.js');
+
+function run(root: string, cache: string, ...args: string[]): Run { return runFrom(root, root, cache, ...args); }
+
+function runFrom(cwd: string, root: string, cache: string, ...args: string[]): Run {
   const env = { ...process.env, XDG_CACHE_HOME: cache };
   delete env.NODE_TEST_CONTEXT;
-  return spawnSync(process.execPath, ['dist/cli.js', '--root', root, ...args], { cwd: process.cwd(), encoding: 'utf8', env });
+  return spawnSync(process.execPath, [cli, '--root', root, ...args], { cwd, encoding: 'utf8', env });
 }
 
 function rows(stdout: string): string[] { return stdout.split('\n').filter((line) => line.startsWith('src/')); }

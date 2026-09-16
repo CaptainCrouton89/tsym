@@ -19,8 +19,8 @@ test('resident status, lazy start, and stop use a private cache', async () => {
     assert.match(stopped.stdout, /state="stopped"/);
 
     const invoke = run(cache, 'outline');
-    assert.equal(invoke.status, 3);
-    assert.match(invoke.stderr, /not-implemented/);
+    assert.equal(invoke.status, 0, 'the first semantic call starts the resident and answers');
+    assert.match(invoke.stdout, /<outline path="\." /);
 
     const ready = run(cache, 'server', 'status');
     assert.equal(ready.status, 0);

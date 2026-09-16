@@ -61,12 +61,13 @@ export function keep(symbol: ReadSymbol, flags: Record<string, boolean | number 
   return (!kinds || kinds.includes(symbol.kind)) && (flags['--exported'] !== true || symbol.exported) && matchesPathFilters(symbol.path, { in: flags['--in'] as string[] | undefined, exclude: flags['--exclude'] as string[] | undefined });
 }
 
-export async function scopeFiles(context: SemanticContext, inputs: readonly string[]): Promise<{ files: string[]; notInProgram: number }> {
+/** Operands resolve from the client cwd; an empty operand list means the workspace root. */
+export async function scopeFiles(context: SemanticContext, cwd: string, inputs: readonly string[]): Promise<{ files: string[]; notInProgram: number }> {
   const workspace = openWorkspace(context.root);
   const listed = workspace.files().filter((file) => extensions.has(path.extname(file)));
   const selected = new Set<string>();
-  for (const input of inputs.length === 0 ? ['.'] : inputs) {
-    const absolute = path.isAbsolute(input) ? input : path.resolve(context.root, input);
+  for (const input of inputs.length === 0 ? [context.root] : inputs) {
+    const absolute = path.resolve(cwd, input);
     const rel = displayPath(context.root, absolute);
     const glob = /[*?[{]/.test(input);
     if (existsSync(absolute)) {
@@ -80,7 +81,7 @@ export async function scopeFiles(context: SemanticContext, inputs: readonly stri
         for (const file of listed) if (rel === '' || file === rel || file.startsWith(`${rel.replace(/\/$/, '')}/`)) selected.add(file);
       }
     } else if (glob) {
-      for (const file of listed) if (workspace.files(input).includes(file)) selected.add(file);
+      for (const file of listed) if (workspace.files(rel).includes(file)) selected.add(file);
     } else throw new DeclarationError('no-such-path', `${input} does not exist.`);
   }
   let notInProgram = 0;
