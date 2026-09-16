@@ -34,13 +34,18 @@ const handler: SemanticHandler = async (context, invocation) => {
       ? await diagnosticsForFiles(context, await explicitFiles(context, invocation, paths))
       : await diagnosticsForProjects(context);
     const filtered = finish(diagnostics, invocation);
+    const limit = invocation.input.flags['--limit'] as number | undefined;
+    const shown = limit === undefined ? filtered : filtered.slice(0, limit);
+    const capped = shown.length < filtered.length;
     const errors = filtered.filter((diagnostic) => diagnostic.severity === 'error').length;
     const warnings = filtered.filter((diagnostic) => diagnostic.severity === 'warning').length;
     const suggestions = filtered.filter((diagnostic) => diagnostic.severity === 'suggestion').length;
     return {
-      data: { element: 'check', attributes: { scope: paths.length === 0 ? 'project' : paths.join(' '), errors, warnings, suggestions, ms: Math.round(performance.now() - started) }, children: filtered.map(renderDiagnostic) },
+      data: { element: 'check', attributes: { scope: paths.length === 0 ? 'project' : paths.join(' '), count: filtered.length, shown: capped ? shown.length : undefined, errors, warnings, suggestions, ms: Math.round(performance.now() - started) }, children: shown.map(renderDiagnostic) },
       count: filtered.length,
-      receipt: `${filtered.length} diagnostic${filtered.length === 1 ? '' : 's'}, ${Math.round(performance.now() - started)} ms`,
+      receipt: capped
+        ? `${shown.length} of ${filtered.length} check rows shown, limit ${limit}, ${Math.round(performance.now() - started)} ms`
+        : `${shown.length} diagnostic${shown.length === 1 ? '' : 's'}, ${Math.round(performance.now() - started)} ms`,
     };
   } catch (error) {
     return failure(error);
@@ -131,12 +136,10 @@ function finish(diagnostics: readonly Diagnostic[], invocation: Parameters<Seman
   const errorsOnly = invocation.input.flags['--errors-only'] === true;
   const include = (invocation.input.flags['--in'] as string[] | undefined) ?? [];
   const exclude = (invocation.input.flags['--exclude'] as string[] | undefined) ?? [];
-  const limit = invocation.input.flags['--limit'] as number | undefined;
   return diagnostics
     .filter((diagnostic) => !errorsOnly || diagnostic.severity === 'error')
     .filter((diagnostic) => (include.length === 0 || include.some((glob) => matchesGlob(diagnostic.file, glob))) && !exclude.some((glob) => matchesGlob(diagnostic.file, glob)))
-    .sort(compare)
-    .slice(0, limit);
+    .sort(compare);
 }
 
 function renderDiagnostic(diagnostic: Diagnostic) {

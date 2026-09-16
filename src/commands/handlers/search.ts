@@ -12,11 +12,11 @@ export async function localSearch(invocation: Invocation): Promise<Answer | Tool
   return {
     data: {
       element: 'search',
-      attributes: { pattern: invocation.input.args[0]!, count: result.items.length },
+      attributes: { pattern: invocation.input.args[0]!, count: result.count, shown: result.receipt.truncated ? result.items.length : undefined },
       text: result.items.map((match) => `${match.path}:${match.start.line}:${match.start.col}  ${match.text}`).join('\n'),
     },
-    count: result.items.length,
-    receipt: `${result.items.length} search row${result.items.length === 1 ? '' : 's'}${result.receipt.truncated ? `, limit ${result.receipt.limit}` : ''}${result.receipt.excluded > 0 ? `, ${result.receipt.excluded} excluded` : ''}, ${result.receipt.elapsed_ms} ms`,
+    count: result.count,
+    receipt: `${result.receipt.truncated ? `${result.items.length} of ${result.count} search rows shown, limit ${result.receipt.limit}` : `${result.items.length} search row${result.items.length === 1 ? '' : 's'}`}${result.receipt.excluded > 0 ? `, ${result.receipt.excluded} excluded` : ''}, ${result.receipt.elapsed_ms} ms`,
   };
 }
 

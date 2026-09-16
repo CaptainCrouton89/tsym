@@ -12,8 +12,8 @@ export function escapeAttribute(value: string): string { return escapeText(value
 export function renderCompletion(completion: Completion, json: boolean): { stdout: string; stderr: string; exitCode: 0 | 1 | 2 | 3 } {
   const exitCode = completionCode(completion);
   const payload = json ? JSON.stringify(completion) + '\n' : render(completion) + '\n';
-  const stdout = isAnswer(completion) ? payload : '';
-  const stderr = isAnswer(completion) ? receipt(completion) : `${payload}${receipt(completion)}`;
+  const stdout = payload;
+  const stderr = receipt(completion);
   return { stdout, stderr, exitCode };
 }
 
@@ -33,18 +33,18 @@ function nodes(data: Answer['data']): string { return (Array.isArray(data) ? dat
 
 export function renderNode(node: OutputNode): string {
   const attributes = Object.entries(node.attributes ?? {}).filter(([, value]) => value !== undefined).map(([key, value]) => ` ${key}="${escapeAttribute(String(value))}"`).join('');
-  const body = [node.text === undefined ? '' : escapeText(node.text), ...(node.children ?? []).map(renderNode)].filter(Boolean).join('\n');
+  const body = [node.text ?? '', ...(node.children ?? []).map(renderNode)].filter(Boolean).join('\n');
   return body === '' ? `<${node.element}${attributes}/>` : `<${node.element}${attributes}>\n${body}\n</${node.element}>`;
 }
 
 function renderInvocationError(error: InvocationError): string {
-  const body = error.problems.map((problem) => `${escapeText(problem.field)}: received ${escapeText(problem.received)}; expected ${escapeText(problem.expected)}.\nNext: ${escapeText(problem.next ?? '')}`).join('\n');
+  const body = error.problems.map((problem) => `${problem.field}: received ${problem.received}; expected ${problem.expected}.\nNext: ${problem.next ?? ''}`).join('\n');
   return xml('error', { code: error.code }, body);
 }
 
 function renderToolError(error: ToolError): string {
   const lines = [error.message, error.received ? `received: ${error.received}` : null, error.expected ? `expected: ${error.expected}` : null, error.logPath ? `log: ${error.logPath}` : null, error.next ? `Next: ${error.next}` : null].filter((line): line is string => line !== null);
-  return xml('error', { code: error.code }, escapeText(lines.join('\n')));
+  return xml('error', { code: error.code }, lines.join('\n'));
 }
 
 function receipt(completion: Completion): string {

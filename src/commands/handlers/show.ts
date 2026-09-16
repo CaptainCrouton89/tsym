@@ -23,7 +23,14 @@ const handler: SemanticHandler = async (context, invocation) => {
   }
   const limit = invocation.input.flags['--limit'] as number | undefined;
   const shown = limit === undefined ? rendered : rendered.slice(0, limit);
-  return { data: { element: 'show', attributes: { count: shown.length }, children: shown }, count: shown.length, receipt: `${shown.length} show declaration${shown.length === 1 ? '' : 's'}${limit !== undefined && rendered.length > shown.length ? `, limit ${limit}` : ''}, ${Math.round(performance.now() - started)} ms` };
+  const capped = shown.length < rendered.length;
+  return {
+    data: { element: 'show', attributes: { count: rendered.length, shown: capped ? shown.length : undefined }, children: shown },
+    count: rendered.length,
+    receipt: capped
+      ? `${shown.length} of ${rendered.length} show rows shown, limit ${limit}, ${Math.round(performance.now() - started)} ms`
+      : `${shown.length} show declaration${shown.length === 1 ? '' : 's'}, ${Math.round(performance.now() - started)} ms`,
+  };
 };
 
 async function spans(context: SemanticContext, declaration: DeclarationRecord): Promise<Span[]> {

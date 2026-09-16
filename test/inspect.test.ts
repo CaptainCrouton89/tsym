@@ -50,7 +50,7 @@ test('inspect follows both interface implementations and reports one dispatch si
 
     const graphResult = run('inspect', 'deliver', '--only', 'calls', '--depth', '2', '--graph');
     assert.equal(graphResult.status, 0);
-    assert.match(graphResult.stdout, /-\.\-&gt;\|impl\|/);
+    assert.match(graphResult.stdout, /-\.->\|impl\|/);
     const addresses = [...graphResult.stdout.matchAll(/src\/inspect-dispatch\.ts:\d+:\d+/g)].map((match) => match[0]!);
     assert.equal(addresses.length, 5);
 

@@ -14,6 +14,7 @@ export interface SearchMatch {
 }
 
 export interface SearchResult {
+  count: number;
   items: SearchMatch[];
   receipt: { elapsed_ms: number; excluded: number; truncated: boolean; limit: number | null };
 }
@@ -48,7 +49,7 @@ export async function search(ws: Workspace, pattern: string, opts: SearchOptions
   const filtered = matches.filter((match) => matchesPathFilters(match.path, opts));
   const limit = opts.limit ?? null;
   const truncated = limit !== null && filtered.length > limit;
-  return { items: truncated ? filtered.slice(0, limit) : filtered, receipt: { elapsed_ms: Math.round(performance.now() - startedAt), excluded: matches.length - filtered.length, truncated, limit } };
+  return { count: filtered.length, items: truncated ? filtered.slice(0, limit) : filtered, receipt: { elapsed_ms: Math.round(performance.now() - startedAt), excluded: matches.length - filtered.length, truncated, limit } };
 }
 
 function matchesPathFilters(file: string, filters: PathFilters): boolean {

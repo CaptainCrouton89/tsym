@@ -36,10 +36,13 @@ const handler: SemanticHandler = async (context, invocation) => {
   const limit = flags['--limit'] as number | undefined;
   const sorted = [...rows.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || numericAddress(a.address, b.address));
   const shown = limit === undefined ? sorted : sorted.slice(0, limit);
+  const capped = shown.length < sorted.length;
   return {
-    data: { element: 'find', attributes: { name, count: shown.length }, text: shown.map((row) => `${row.address}  ${row.kind}${row.exported ? '  export' : ''}  ${row.qualifiedName}`).join('\n') },
-    count: shown.length,
-    receipt: `${shown.length} find row${shown.length === 1 ? '' : 's'}${limit !== undefined && sorted.length > shown.length ? `, limit ${limit}` : ''}, ${Math.round(performance.now() - started)} ms`,
+    data: { element: 'find', attributes: { name, count: sorted.length, shown: capped ? shown.length : undefined }, text: shown.map((row) => `${row.address}  ${row.kind}${row.exported ? '  export' : ''}  ${row.qualifiedName}`).join('\n') },
+    count: sorted.length,
+    receipt: capped
+      ? `${shown.length} of ${sorted.length} find rows shown, limit ${limit}, ${Math.round(performance.now() - started)} ms`
+      : `${shown.length} find row${shown.length === 1 ? '' : 's'}, ${Math.round(performance.now() - started)} ms`,
   };
 };
 

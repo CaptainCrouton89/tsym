@@ -21,13 +21,13 @@ test('CLI renders declaration-driven help and complete schema failures with one 
 
   const invalid = run('inspect', 'thing', '--only', 'refs', '--depth', '0', '--graph', '--each', '2', '--unknown');
   assert.equal(invalid.status, 2);
-  assert.match(invalid.stderr, /--unknown/);
-  assert.match(invalid.stderr, /--depth/);
-  assert.match(invalid.stderr, /--graph/);
-  assert.match(invalid.stderr, /--each/);
-  assert.equal((invalid.stderr.match(/invocation rejected/g) ?? []).length, 1);
+  assert.match(invalid.stdout, /--unknown/);
+  assert.match(invalid.stdout, /--depth/);
+  assert.match(invalid.stdout, /--graph/);
+  assert.match(invalid.stdout, /--each/);
+  assert.equal(invalid.stderr, 'invocation rejected, 0 ms\n');
 
   const renamedFlag = run('inspect', 'thing', '--limit', '5');
   assert.equal(renamedFlag.status, 2);
-  assert.match(renamedFlag.stderr, /--each N/);
+  assert.match(renamedFlag.stdout, /--each N/);
 });

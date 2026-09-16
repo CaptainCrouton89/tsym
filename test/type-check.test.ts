@@ -57,23 +57,24 @@ test('check reports file diagnostics, filters before the limit, and clean files 
     assert.match(diagnostic.stdout, /<diagnostic at="src\/check-diagnostics.ts:1:14" severity="error" code="2322">\nType 'number' is not assignable to type 'string'\./);
 
     const capped = run('check', 'src/check-diagnostics.ts', '--limit', '0');
-    assert.equal(capped.status, 1);
-    assert.match(capped.stdout, /errors="0" warnings="0"/);
+    assert.equal(capped.status, 0);
+    assert.match(capped.stdout, /count="1" shown="0" errors="1" warnings="0"/);
+    assert.match(capped.stderr, /0 of 1 check rows shown, limit 0/);
 
     const clean = run('check', 'src/greet.ts');
     assert.equal(clean.status, 1);
-    assert.match(clean.stdout, /<check scope="src\/greet.ts" errors="0" warnings="0"/);
+    assert.match(clean.stdout, /<check scope="src\/greet.ts" count="0" errors="0" warnings="0"/);
 
     const fromSubdirectory = runFrom(path.join(root, 'src'), 'check', 'check-diagnostics.ts', '--errors-only');
     assert.equal(fromSubdirectory.status, 0, 'a relative operand resolves from the client cwd, not the root');
     assert.match(fromSubdirectory.stdout, /<diagnostic at="src\/check-diagnostics.ts:1:14"/);
     const rootRelativeFromSubdirectory = runFrom(path.join(root, 'src'), 'check', 'src/check-diagnostics.ts');
     assert.equal(rootRelativeFromSubdirectory.status, 2);
-    assert.match(rootRelativeFromSubdirectory.stderr, /no-such-path/);
+    assert.match(rootRelativeFromSubdirectory.stdout, /no-such-path/);
 
     const project = run('check', '--errors-only');
     assert.equal(project.status, 0);
-    assert.match(project.stdout, /scope="project" errors="1" warnings="0" suggestions="0"/);
+    assert.match(project.stdout, /scope="project" count="1" errors="1" warnings="0" suggestions="0"/);
     assert.doesNotMatch(project.stdout, /lib\.dom\.d\.ts/);
 
     const findAfterProjectCheck = run('find', 'greet');
@@ -86,15 +87,15 @@ test('check reports file diagnostics, filters before the limit, and clean files 
 
     const outsideProgram = run('check', 'README.md');
     assert.equal(outsideProgram.status, 2);
-    assert.match(outsideProgram.stderr, /README\.md exists but is not part of a TypeScript project/);
-    assert.match(outsideProgram.stderr, /expected a file listed by a project tsconfig\.json/);
+    assert.match(outsideProgram.stdout, /README\.md exists but is not part of a TypeScript project/);
+    assert.match(outsideProgram.stdout, /expected a file listed by a project tsconfig\.json/);
 
     const typeFlag = run('type', 'greet', '--errors-only');
     assert.equal(typeFlag.status, 2);
-    assert.match(typeFlag.stderr, /--errors-only/);
+    assert.match(typeFlag.stdout, /--errors-only/);
     const checkFlag = run('check', 'src/greet.ts', '--def');
     assert.equal(checkFlag.status, 2);
-    assert.match(checkFlag.stderr, /--def/);
+    assert.match(checkFlag.stdout, /--def/);
   } finally {
     await close(temp, cache, run);
   }

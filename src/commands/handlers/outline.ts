@@ -35,8 +35,9 @@ const handler: SemanticHandler = async (context, invocation) => {
   const limit = flags['--limit'] as number | undefined;
   const shown = limit === undefined ? rows : rows.slice(0, limit);
   const symbolsCount = files.flatMap((file) => select(file.symbols, flags, requestedDirectory ? depth - 1 : depth, flags['--members'] === true)).length;
-  const receipt = `${shown.length} outline row${shown.length === 1 ? '' : 's'}${limit !== undefined && rows.length > shown.length ? `, limit ${limit}` : ''}${scope.notInProgram > 0 ? `, ${scope.notInProgram} not in program` : ''}, ${Math.round(performance.now() - started)} ms`;
-  return { data: { element: 'outline', attributes: { path: invocation.input.args.join(' ') || '.', depth, symbols: symbolsCount, files: files.length }, text: shown.map((row) => row.text).join('\n') }, count: shown.length, receipt };
+  const capped = shown.length < rows.length;
+  const receipt = `${capped ? `${shown.length} of ${rows.length} outline rows shown, limit ${limit}` : `${shown.length} outline row${shown.length === 1 ? '' : 's'}`}${scope.notInProgram > 0 ? `, ${scope.notInProgram} not in program` : ''}, ${Math.round(performance.now() - started)} ms`;
+  return { data: { element: 'outline', attributes: { path: invocation.input.args.join(' ') || '.', depth, symbols: symbolsCount, files: files.length, count: rows.length, shown: capped ? shown.length : undefined }, text: shown.map((row) => row.text).join('\n') }, count: rows.length, receipt };
 };
 
 interface FileSymbols { file: string; source: string; symbols: ReadSymbol[]; }

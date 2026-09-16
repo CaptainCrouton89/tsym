@@ -58,11 +58,11 @@ test('outline, find, and show use the resident compiler without opening outline 
     assert.match(memberSource.stdout, /say\(name: string\): string/);
     const invalidAddress = run(root, cache, 'show', 'src/greet.ts:7:14');
     assert.equal(invalidAddress.status, 2);
-    assert.match(invalidAddress.stderr, /code="invalid-address"/);
+    assert.match(invalidAddress.stdout, /code="invalid-address"/);
     const escapedOutline = run(root, cache, 'outline', 'src/read-leaf-x&y.ts');
-    assert.match(escapedOutline.stdout, /src\/read-leaf-x&amp;y\.ts:1:14/);
+    assert.match(escapedOutline.stdout, /src\/read-leaf-x&y\.ts:1:14/);
     const special = run(root, cache, 'find', 'special');
-    assert.match(special.stdout, /src\/read-leaf-x&amp;y\.ts:1:14/);
+    assert.match(special.stdout, /src\/read-leaf-x&y\.ts:1:14/);
     const specialSource = run(root, cache, 'show', 'src/read-leaf-x&y.ts:1:14');
     assert.match(specialSource.stdout, /export const special = 1;/);
     const nested = run(root, cache, 'find', 'Outer.Inner.deep');
@@ -80,13 +80,13 @@ test('outline, find, and show use the resident compiler without opening outline 
     assert.match(fromSubdirectory.stdout, /src\/greet\.ts:2:17  function  export  greet/);
     const globFromSubdirectory = runFrom(path.join(root, 'src'), root, cache, 'outline', 'gre*.ts');
     assert.equal(globFromSubdirectory.status, 0, globFromSubdirectory.stderr);
-    assert.match(globFromSubdirectory.stdout, /<outline path="gre\*\.ts" depth="1" symbols="6" files="1">/);
+    assert.match(globFromSubdirectory.stdout, /<outline path="gre\*\.ts" depth="1" symbols="6" files="1" count="6">/);
     assert.deepEqual(rows(globFromSubdirectory.stdout), rows(fromSubdirectory.stdout), 'a glob operand lists the matched files\' declarations, not a directory container row');
 
     const outside = run(root, cache, 'outline', 'missing.ts');
     assert.equal(outside.status, 2);
-    assert.match(outside.stderr, /<error code="no-such-path">/);
-    assert.doesNotMatch(outside.stderr, /at Object\.ThrowNoProject/);
+    assert.match(outside.stdout, /<error code="no-such-path">/);
+    assert.doesNotMatch(outside.stdout, /at Object\.ThrowNoProject/);
 
     for (const leaf of ['outline', 'find', 'show']) {
       const help = run(root, cache, leaf, '-h');

@@ -57,7 +57,7 @@ test('rename previews shorthand and string-literal edits without writing, then a
 
     const invalid = run(fixture.root, fixture.cache, 'rename', 'renameShorthandValue', 'bad-name');
     assert.equal(invalid.status, 2, invalid.stderr);
-    assert.match(invalid.stderr, /identifier/);
+    assert.match(invalid.stdout, /identifier/);
   } finally {
     fixture.close();
   }

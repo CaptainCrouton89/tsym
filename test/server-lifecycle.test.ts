@@ -27,6 +27,10 @@ test('resident status, lazy start, and stop use a private cache', async () => {
     assert.equal(warm.status, 0);
     assert.doesNotMatch(warm.stderr, /server started/);
 
+    const reload = run(cache, 'server', 'reload');
+    assert.equal(reload.status, 0);
+    assert.match(reload.stderr, /\(server started, \d+ ms\)/);
+
     const ready = run(cache, 'server', 'status');
     assert.equal(ready.status, 0);
     assert.match(ready.stdout, /state="ready"/);
