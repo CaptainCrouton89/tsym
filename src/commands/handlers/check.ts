@@ -2,8 +2,9 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { xml, escapeText } from '../../output.js';
 import { matchesGlob, Workspace } from '../../core/workspace.js';
+import type { DiagnosticEvent } from '../../server/tsserver.js';
 import type { SemanticHandler } from '../handlers.js';
-import type { ToolError } from '../types.js';
+import type { InvocationError, ToolError } from '../types.js';
 
 interface Response { success?: boolean; body?: unknown; message?: string; }
 interface ProtocolDiagnostic {
@@ -88,25 +89,32 @@ async function synchronousDiagnostics(context: Parameters<SemanticHandler>[0], c
 }
 
 async function diagnosticsForProjects(context: Parameters<SemanticHandler>[0]): Promise<Diagnostic[]> {
-  const session = context.session as unknown as { geterrForProject?: (file: string) => Promise<unknown> };
-  if (!session.geterrForProject) throw new Error('The resident does not expose geterrForProject completion.');
   const diagnostics: Diagnostic[] = [];
   for (const project of context.projects.records()) {
     if (!project.bootstrap) continue;
-    const events = await context.session.withOpen(project.bootstrap, () => session.geterrForProject!(project.bootstrap!));
-    diagnostics.push(...eventDiagnostics(context.root, events));
+    const events = await context.session.withOpen(project.bootstrap, () => context.session.diagnosticsForProject(project.bootstrap!));
+    diagnostics.push(...eventDiagnostics(context.root, events), ...configDiagnostics(context.root, context.session.drainEvents('configFileDiag')));
   }
   return unique(diagnostics);
 }
 
-function eventDiagnostics(root: string, events: unknown): Diagnostic[] {
-  if (!Array.isArray(events)) return [];
+function eventDiagnostics(root: string, events: readonly DiagnosticEvent[]): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
-  for (const event of events as { event?: string; body?: unknown }[]) {
-    if (event.event !== 'syntaxDiag' && event.event !== 'semanticDiag' && event.event !== 'suggestionDiag' && event.event !== 'configFileDiag') continue;
-    const body = event.body as { file?: string; diagnostics?: ProtocolDiagnostic[] } | undefined;
-    if (!body?.file) continue;
-    for (const diagnostic of body.diagnostics ?? []) diagnostics.push(normalize(path.resolve(body.file), diagnostic, root));
+  for (const event of events) {
+    const file = path.resolve(event.file);
+    if (!inside(root, file)) continue;
+    for (const diagnostic of event.diagnostics as ProtocolDiagnostic[]) diagnostics.push(normalize(file, diagnostic, root));
+  }
+  return diagnostics;
+}
+
+function configDiagnostics(root: string, events: readonly { body?: unknown }[]): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  for (const event of events) {
+    const body = event.body as { configFile?: string; triggerFile?: string; diagnostics?: ProtocolDiagnostic[] } | undefined;
+    const file = body?.configFile ?? body?.triggerFile;
+    if (!file || !inside(root, path.resolve(file))) continue;
+    for (const diagnostic of body?.diagnostics ?? []) diagnostics.push(normalize(path.resolve(file), diagnostic, root));
   }
   return diagnostics;
 }
@@ -160,17 +168,20 @@ function compare(left: Diagnostic, right: Diagnostic): number {
 }
 
 function hasGlob(value: string): boolean { return /[*?[{]/.test(value); }
+function inside(root: string, file: string): boolean { const value = path.relative(root, file); return value === '' || !value.startsWith(`..${path.sep}`) && value !== '..' && !path.isAbsolute(value); }
 function relative(root: string, file: string): string { return path.relative(root, file).split(path.sep).join('/'); }
 
-function invocationFailure(code: string, message: string, received: string, expected: string): ToolError {
-  return { category: 'tool', code, message, received, expected, next: 'Pass a file listed by the loaded TypeScript project.' };
+function invocationFailure(code: string, message: string, received: string, expected: string): InvocationError {
+  return { category: 'invocation', code, problems: [{ field: 'path', received, expected, next: 'Pass a file listed by the loaded TypeScript project.' }] };
 }
 
-function failure(error: unknown): ToolError {
-  if (isToolError(error)) return error;
+function failure(error: unknown): InvocationError | ToolError {
+  if (isCompletionError(error)) return error;
   return { category: 'tool', code: 'typescript-error', message: 'TypeScript could not answer the diagnostic query.', received: error instanceof Error ? error.message : String(error), expected: 'successful TypeScript diagnostic responses', next: 'Read the server log, then retry.' };
 }
 
-function isToolError(value: unknown): value is ToolError { return typeof value === 'object' && value !== null && 'category' in value && (value as { category?: unknown }).category === 'tool'; }
+function isCompletionError(value: unknown): value is InvocationError | ToolError {
+  return typeof value === 'object' && value !== null && 'category' in value;
+}
 
 export default handler;

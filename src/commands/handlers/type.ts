@@ -38,6 +38,7 @@ const handler: SemanticHandler = async (context, invocation) => {
 
     return { element: 'type', body: symbols.join('\n'), count: answers };
   } catch (error) {
+    if (error instanceof DeclarationError) throw error;
     return failure(error);
   }
 };
@@ -82,7 +83,6 @@ function displayText(value: string | readonly DisplayPart[] | undefined): string
 }
 
 function failure(error: unknown): ToolError {
-  if (error instanceof DeclarationError) return { category: 'tool', code: error.code, message: error.message, received: error.message, expected: 'a declaration in the loaded TypeScript project', next: 'Pass a declaration address or name reported by symbols find.' };
   return { category: 'tool', code: 'typescript-error', message: 'TypeScript could not answer the type query.', received: error instanceof Error ? error.message : String(error), expected: 'a successful quickinfo or typeDefinition response', next: 'Read the server log, then retry.' };
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, rmSync, watch } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -8,13 +8,15 @@ import { test } from 'node:test';
 function setup() {
   const temp = mkdtempSync(path.join(tmpdir(), 'symbols-type-check-'));
   const root = path.join(temp, 'fixture');
-  const cache = path.join(temp, 'cache');
+  const cache = mkdtempSync(path.join(tmpdir(), 's-'));
   cpSync('test/fixture', root, { recursive: true });
+  writeFileSync(path.join(root, 'src/type-doc.ts'), `/**\n * Returns the input after recording why the caller supplied it.\n * @param value Text to return.\n * @returns The supplied text.\n */\nexport function documentedType(value: string): string {\n  return value;\n}\n`);
+  writeFileSync(path.join(root, 'src/check-diagnostics.ts'), 'export const diagnosticValue: string = 42;\n');
   const run = (...args: string[]) => spawnSync(process.execPath, ['dist/cli.js', '--root', root, ...args], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } });
-  return { temp, run };
+  return { temp, cache, run };
 }
 
-async function close(temp: string, run: (...args: string[]) => ReturnType<typeof spawnSync>): Promise<void> {
+async function close(temp: string, cache: string, run: (...args: string[]) => ReturnType<typeof spawnSync>): Promise<void> {
   const status = run('server', 'status');
   const port = /port="([^"]+)"/.exec(status.stdout)?.[1];
   if (port) {
@@ -23,10 +25,11 @@ async function close(temp: string, run: (...args: string[]) => ReturnType<typeof
     await removed;
   }
   rmSync(temp, { recursive: true, force: true });
+  rmSync(cache, { recursive: true, force: true });
 }
 
 test('type preserves quickinfo, documentation, tags, and a type declaration address', async () => {
-  const { temp, run } = setup();
+  const { temp, cache, run } = setup();
   try {
     const result = run('type', 'documentedType', '--def');
     assert.equal(result.status, 0);
@@ -39,16 +42,16 @@ test('type preserves quickinfo, documentation, tags, and a type declaration addr
     assert.equal(usage.status, 0);
     assert.match(usage.stdout, /at="src\/greet.ts:2:17" name="greet"/);
   } finally {
-    await close(temp, run);
+    await close(temp, cache, run);
   }
 });
 
 test('check reports file diagnostics, filters before the limit, and clean files exit one', async () => {
-  const { temp, run } = setup();
+  const { temp, cache, run } = setup();
   try {
     const diagnostic = run('check', 'src/check-diagnostics.ts', '--errors-only');
     assert.equal(diagnostic.status, 0);
-    assert.match(diagnostic.stdout, /<diagnostic at="src\/check-diagnostics.ts:1:14" severity="error" code="2322">\nType &apos;number&apos; is not assignable to type &apos;string&apos;\./);
+    assert.match(diagnostic.stdout, /<diagnostic at="src\/check-diagnostics.ts:1:14" severity="error" code="2322">\nType 'number' is not assignable to type 'string'\./);
 
     const capped = run('check', 'src/check-diagnostics.ts', '--limit', '0');
     assert.equal(capped.status, 1);
@@ -58,6 +61,11 @@ test('check reports file diagnostics, filters before the limit, and clean files 
     assert.equal(clean.status, 1);
     assert.match(clean.stdout, /<check scope="src\/greet.ts" errors="0" warnings="0"/);
 
+    const project = run('check', '--errors-only');
+    assert.equal(project.status, 0);
+    assert.match(project.stdout, /scope="project" errors="1" warnings="0" suggestions="0"/);
+    assert.doesNotMatch(project.stdout, /lib\.dom\.d\.ts/);
+
     const typeFlag = run('type', 'greet', '--errors-only');
     assert.equal(typeFlag.status, 2);
     assert.match(typeFlag.stderr, /--errors-only/);
@@ -65,7 +73,7 @@ test('check reports file diagnostics, filters before the limit, and clean files 
     assert.equal(checkFlag.status, 2);
     assert.match(checkFlag.stderr, /--def/);
   } finally {
-    await close(temp, run);
+    await close(temp, cache, run);
   }
 });
 
