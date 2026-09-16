@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { DeclarationRecord } from '../core/declarations.js';
 import { matchesPathFilters } from '../core/receipt.js';
 import { query } from '../store/query.js';
@@ -16,24 +17,21 @@ export interface ReferenceRow {
 }
 
 export async function references(context: SemanticContext, record: DeclarationRecord, filters: { in: readonly string[]; exclude: readonly string[] }): Promise<ReferenceRow[]> {
-  const rows = storeRows(context, 'MATCH (owner:Declaration)-[reference:REFERENCES]->(target:Declaration) WHERE target.key = $key RETURN owner.file AS file, owner.line AS declarationLine, owner.col AS declarationCol, reference.line AS line, reference.col AS col, reference.role AS role', { key: recordKey(context, record) });
-  const records = new Map<string, DeclarationRecord>();
-  for (const row of rows) {
-    const address = declarationAddress(row);
-    records.set(address, await context.resolver.resolve(address));
-  }
+  const rows = storeRows(context, 'MATCH (owner:Declaration)-[reference:REFERENCES]->(target:Declaration) WHERE target.key = $key RETURN owner.file AS file, owner.kind AS kind, owner.qname AS qname, reference.line AS line, reference.col AS col, reference.role AS role', { key: recordKey(context, record) });
   return rows.flatMap((row) => {
-    const owner = records.get(declarationAddress(row));
-    if (!owner || !matchesPathFilters(owner.location.path, filters)) return [];
-    return [{ path: owner.location.path, line: number(row, 'line'), col: number(row, 'col'), kind: owner.kind, qualifiedName: owner.qualifiedName, role: text(row, 'role') }];
+    const file = text(row, 'file');
+    if (!matchesPathFilters(file, filters)) return [];
+    const kind = text(row, 'kind');
+    const qualifiedName = kind === 'module' ? path.basename(file) : text(row, 'qname');
+    return [{ path: file, line: number(row, 'line'), col: number(row, 'col'), kind, qualifiedName, role: text(row, 'role') }];
   }).sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.col - b.col);
 }
 
 export async function implementations(context: SemanticContext, record: DeclarationRecord): Promise<DeclarationRecord[]> {
   const key = recordKey(context, record);
   const rows = [
-    ...storeRows(context, 'MATCH (impl:Declaration)-[:IMPLEMENTS]->(target:Declaration) WHERE target.key = $key RETURN DISTINCT impl.file AS file, impl.line AS declarationLine, impl.col AS declarationCol', { key }),
-    ...storeRows(context, 'MATCH (impl:Declaration)-[:EXTENDS]->(target:Declaration) WHERE target.key = $key RETURN DISTINCT impl.file AS file, impl.line AS declarationLine, impl.col AS declarationCol', { key }),
+    ...storeRows(context, 'MATCH (impl:Declaration)-[:IMPLEMENTS]->(target:Declaration) WHERE target.key = $key RETURN DISTINCT impl.key AS key, impl.file AS file, impl.line AS declarationLine, impl.col AS declarationCol, impl.name AS name, impl.qname AS qname, impl.kind AS kind', { key }),
+    ...storeRows(context, 'MATCH (impl:Declaration)-[:EXTENDS]->(target:Declaration) WHERE target.key = $key RETURN DISTINCT impl.key AS key, impl.file AS file, impl.line AS declarationLine, impl.col AS declarationCol, impl.name AS name, impl.qname AS qname, impl.kind AS kind', { key }),
   ];
   return resolveRows(context, rows);
 }
@@ -83,14 +81,15 @@ interface Found {
 
 async function outgoing(context: SemanticContext, current: DeclarationRecord, keys: Map<string, string>): Promise<Found> {
   const key = keyFor(context, current, keys);
-  const declarationRows = storeRows(context, 'MATCH (source:Declaration)-[call:CALLS]->(target:Declaration) WHERE source.key = $key RETURN target.file AS file, target.line AS declarationLine, target.col AS declarationCol, call.line AS line, call.col AS col, call.dispatch AS dispatch', { key });
+  const declarationRows = storeRows(context, 'MATCH (source:Declaration)-[call:CALLS]->(target:Declaration) WHERE source.key = $key RETURN target.key AS key, target.file AS file, target.line AS declarationLine, target.col AS declarationCol, target.name AS name, target.qname AS qname, target.kind AS kind, call.line AS line, call.col AS col, call.dispatch AS dispatch', { key });
   const externalRows = storeRows(context, 'MATCH (source:Declaration)-[call:CALLS]->(target:External) WHERE source.key = $key RETURN target.name AS name, call.line AS line, call.col AS col', { key });
   const edges: FoundEdge[] = [];
   const unresolved: UnresolvedSite[] = externalRows.map((row) => unresolvedSite(current, row, text(row, 'name'), 'external', false));
   for (const row of declarationRows) {
     const siteId = site(current, row);
-    const target = await context.resolver.resolve(declarationAddress(row));
-    const targetKey = keyFor(context, target, keys);
+    const target = recordFromStore(context, row);
+    const targetKey = text(row, 'key');
+    keys.set(target.address, targetKey);
     if (!boolean(row, 'dispatch')) {
       edges.push({ from: current.address, to: target.address, kind: 'call', siteId, record: target });
       continue;
@@ -117,9 +116,9 @@ async function incomingRoots(context: SemanticContext, seeds: readonly Declarati
 async function incoming(context: SemanticContext, current: DeclarationRecord, keys: Map<string, string>): Promise<Found> {
   const key = keyFor(context, current, keys);
   const edges: FoundEdge[] = [];
-  for (const row of storeRows(context, 'MATCH (caller:Declaration)-[call:CALLS]->(target:Declaration) WHERE target.key = $key AND call.dispatch = false RETURN caller.file AS file, caller.line AS declarationLine, caller.col AS declarationCol, call.line AS line, call.col AS col', { key })) {
-    const caller = await context.resolver.resolve(declarationAddress(row));
-    keys.set(caller.address, keyFor(context, caller, keys));
+  for (const row of storeRows(context, 'MATCH (caller:Declaration)-[call:CALLS]->(target:Declaration) WHERE target.key = $key AND call.dispatch = false RETURN caller.key AS key, caller.file AS file, caller.line AS declarationLine, caller.col AS declarationCol, caller.name AS name, caller.qname AS qname, caller.kind AS kind, call.line AS line, call.col AS col', { key })) {
+    const caller = recordFromStore(context, row);
+    keys.set(caller.address, text(row, 'key'));
     edges.push({ from: caller.address, to: current.address, kind: 'call', siteId: site(caller, row), record: caller });
   }
   for (const contractKey of storeRows(context, 'MATCH (concrete:Declaration)-[:IMPLEMENTS]->(target:Declaration) WHERE concrete.key = $key RETURN DISTINCT target.key AS key', { key }).map((row) => text(row, 'key'))) {
@@ -133,16 +132,30 @@ async function incoming(context: SemanticContext, current: DeclarationRecord, ke
 }
 
 async function implementationRows(context: SemanticContext, targetKey: string): Promise<DeclarationRecord[]> {
-  return resolveRows(context, storeRows(context, 'MATCH (impl:Declaration)-[:IMPLEMENTS]->(target:Declaration) WHERE target.key = $key RETURN DISTINCT impl.file AS file, impl.line AS declarationLine, impl.col AS declarationCol', { key: targetKey }));
+  return resolveRows(context, storeRows(context, 'MATCH (impl:Declaration)-[:IMPLEMENTS]->(target:Declaration) WHERE target.key = $key RETURN DISTINCT impl.key AS key, impl.file AS file, impl.line AS declarationLine, impl.col AS declarationCol, impl.name AS name, impl.qname AS qname, impl.kind AS kind', { key: targetKey }));
 }
 
 async function resolveRows(context: SemanticContext, rows: readonly StoreRow[]): Promise<DeclarationRecord[]> {
-  const records = new Map<string, DeclarationRecord>();
-  for (const row of rows) {
-    const address = declarationAddress(row);
-    records.set(address, await context.resolver.resolve(address));
-  }
-  return [...records.values()];
+  return [...new Map(rows.map((row) => {
+    const record = recordFromStore(context, row);
+    return [record.address, record];
+  })).values()];
+}
+
+function recordFromStore(context: SemanticContext, row: StoreRow): DeclarationRecord {
+  const location = { path: text(row, 'file'), line: number(row, 'declarationLine'), col: number(row, 'declarationCol') };
+  const isModule = location.line === 0 && location.col === 0;
+  const name = isModule ? path.basename(location.path) : text(row, 'name');
+  return {
+    address: declarationAddress(row),
+    location,
+    file: `${context.root}/${location.path}`,
+    kind: text(row, 'kind'),
+    name,
+    qualifiedName: isModule ? name : text(row, 'qname'),
+    nameSpan: { start: 0, end: name.length },
+    span: { start: 0, end: 0 },
+  };
 }
 
 function storeRows(context: SemanticContext, statement: string, parameters: Record<string, string | number>): StoreRow[] {
