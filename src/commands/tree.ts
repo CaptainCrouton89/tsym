@@ -75,7 +75,8 @@ export function findNode(tokens: readonly string[]): { node: CommandDeclaration;
 
 export function parseInvocation(argv: readonly string[]): Invocation | InvocationError | { help: CommandDeclaration } {
   const helpIndex = argv.findIndex((token) => token === '-h' || token === '--help');
-  const noHelp = helpIndex >= 0 ? [...argv.slice(0, helpIndex), ...argv.slice(helpIndex + 1)] : [...argv];
+  const withoutHelp = helpIndex >= 0 ? [...argv.slice(0, helpIndex), ...argv.slice(helpIndex + 1)] : [...argv];
+  const noHelp = normalizeGlobals(withoutHelp);
   const pathTokens: string[] = [];
   for (const token of noHelp) {
     if (token === '--' || token.startsWith('-')) break;
@@ -140,6 +141,19 @@ function parseValue(raw: string, declaration: FlagDeclaration, problems: Validat
   }
   if (declaration.values && !declaration.values.includes(raw)) { problems.push({ field: declaration.name, received: raw, expected: `one of ${declaration.values.join(', ')}`, next: helpNext(node) }); return undefined; }
   return raw;
+}
+
+function normalizeGlobals(tokens: readonly string[]): string[] {
+  const commandTokens: string[] = [];
+  const globals: string[] = [];
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]!;
+    if (token === '--json') { globals.push(token); continue; }
+    if (token === '--root') { globals.push(token); if (tokens[index + 1] !== undefined) globals.push(tokens[++index]!); continue; }
+    if (token.startsWith('--root=')) { globals.push(token); continue; }
+    commandTokens.push(token);
+  }
+  return [...commandTokens, ...globals];
 }
 
 function nodePath(node: CommandDeclaration): string[] { return node === commandTree ? [] : []; }

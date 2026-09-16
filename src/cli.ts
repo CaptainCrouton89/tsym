@@ -2,6 +2,7 @@ import { renderHelp } from './commands/help.js';
 import { parseInvocation } from './commands/tree.js';
 import type { Completion, Invocation } from './commands/types.js';
 import { renderCompletion } from './output.js';
+import { invokeResident, serverReload, serverStatus, serverStop } from './server/client.js';
 
 async function main(argv: string[]): Promise<number> {
   const parsed = parseInvocation(argv);
@@ -11,14 +12,12 @@ async function main(argv: string[]): Promise<number> {
 }
 
 async function dispatch(invocation: Invocation): Promise<Completion> {
-  return {
-    category: 'tool',
-    code: 'not-implemented',
-    message: `symbols ${invocation.path.join(' ')} is declared but its handler has not landed yet.`,
-    received: invocation.path.join(' '),
-    expected: 'a completed semantic handler',
-    next: 'Run the command again after its implementation lands.',
-  };
+  switch (invocation.declaration.handler) {
+    case 'server-status': return serverStatus(invocation.root);
+    case 'server-stop': return serverStop(invocation.root);
+    case 'server-reload': return serverReload(invocation.root);
+    default: return invokeResident(invocation);
+  }
 }
 
 function emit(completion: Completion, json: boolean): number {
