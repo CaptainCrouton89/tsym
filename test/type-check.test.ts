@@ -12,6 +12,7 @@ function setup() {
   cpSync('test/fixture', root, { recursive: true });
   writeFileSync(path.join(root, 'src/type-doc.ts'), `/**\n * Returns the input after recording why the caller supplied it.\n * @param value Text to return.\n * @returns The supplied text.\n */\nexport function documentedType(value: string): string {\n  return value;\n}\n`);
   writeFileSync(path.join(root, 'src/check-diagnostics.ts'), 'export const diagnosticValue: string = 42;\n');
+  writeFileSync(path.join(root, 'README.md'), '# outside the TypeScript project\n');
   const run = (...args: string[]) => spawnSync(process.execPath, ['dist/cli.js', '--root', root, ...args], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } });
   return { temp, cache, run };
 }
@@ -65,6 +66,11 @@ test('check reports file diagnostics, filters before the limit, and clean files 
     assert.equal(project.status, 0);
     assert.match(project.stdout, /scope="project" errors="1" warnings="0" suggestions="0"/);
     assert.doesNotMatch(project.stdout, /lib\.dom\.d\.ts/);
+
+    const outsideProgram = run('check', 'README.md');
+    assert.equal(outsideProgram.status, 2);
+    assert.match(outsideProgram.stderr, /README\.md exists but is not part of a TypeScript project/);
+    assert.match(outsideProgram.stderr, /expected a file listed by a project tsconfig\.json/);
 
     const typeFlag = run('type', 'greet', '--errors-only');
     assert.equal(typeFlag.status, 2);

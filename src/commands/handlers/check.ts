@@ -171,8 +171,8 @@ function hasGlob(value: string): boolean { return /[*?[{]/.test(value); }
 function inside(root: string, file: string): boolean { const value = path.relative(root, file); return value === '' || !value.startsWith(`..${path.sep}`) && value !== '..' && !path.isAbsolute(value); }
 function relative(root: string, file: string): string { return path.relative(root, file).split(path.sep).join('/'); }
 
-function invocationFailure(code: string, message: string, received: string, expected: string): InvocationError {
-  return { category: 'invocation', code, problems: [{ field: 'path', received, expected, next: 'Pass a file listed by the loaded TypeScript project.' }] };
+function invocationFailure(code: string, message: string, _received: string, expected: string): InvocationError {
+  return { category: 'invocation', code, problems: [{ field: 'path', received: message, expected, next: 'Pass a file listed by the loaded TypeScript project.' }] };
 }
 
 function failure(error: unknown): InvocationError | ToolError {
