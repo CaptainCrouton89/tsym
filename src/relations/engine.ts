@@ -82,10 +82,10 @@ async function incomingForTarget(context: SemanticContext, target: DeclarationRe
   const edges: FoundEdge[] = [];
   for (const call of hierarchyCalls(body)) {
     if (!call.from) continue;
-    const source = await recordFor(context, hierarchySpan(call.from));
-    if (!source) continue;
     for (const rawSpan of call.fromSpans ?? []) {
-      const site = siteFromSpan(context, spanIn(source.file, rawSpan));
+      const span = spanIn(call.from.file, rawSpan);
+      const source = context.resolver.fromSyntax(span.file, context.source.ownerForSpan(span.file, span.start));
+      const site = siteFromSpan(context, span);
       const declared = await definitionsAt(context, site);
       const dispatch = declared.some((definition) => classifyTarget(context, definition) === 'dispatch');
       if (dispatch && !await implementsConcrete(context, declared, concrete)) continue;

@@ -16,7 +16,7 @@ export function callSitesFor(context: SemanticContext, record: DeclarationRecord
   const visit = (node: ts.Node): void => {
     if (node !== source && namedCallable(node, compiler) && !isCurrent(node, record, source)) return;
     const token = calleeToken(node, compiler);
-    if (token && owns(node, record, source, compiler)) {
+    if (token && owns(context, node, record, source, compiler)) {
       const point = compiler.getLineAndCharacterOfPosition(source, token.getStart(source));
       const line = point.line + 1;
       const col = point.character + 1;
@@ -70,13 +70,10 @@ function loadCompiler(context: SemanticContext): typeof ts { return createRequir
 function parse(context: SemanticContext, file: string, compiler: typeof ts): ts.SourceFile { return compiler.createSourceFile(file, context.source.read(file), compiler.ScriptTarget.Latest, true, file.endsWith('.tsx') ? compiler.ScriptKind.TSX : compiler.ScriptKind.TS); }
 function tokenAt(source: ts.SourceFile, position: number): ts.Node { let current: ts.Node = source; for (;;) { const child = current.forEachChild((candidate) => position >= candidate.getFullStart() && position < candidate.getEnd() ? candidate : undefined); if (!child) return current; current = child; } }
 function namedCallable(node: ts.Node, compiler: typeof ts): boolean { return (compiler.isFunctionDeclaration(node) || compiler.isMethodDeclaration(node) || compiler.isGetAccessorDeclaration(node) || compiler.isSetAccessorDeclaration(node) || compiler.isConstructorDeclaration(node) || compiler.isVariableDeclaration(node) && !!node.initializer && (compiler.isArrowFunction(node.initializer) || compiler.isFunctionExpression(node.initializer))) && !!('name' in node && node.name); }
-function owns(node: ts.Node, record: DeclarationRecord, source: ts.SourceFile, compiler: typeof ts): boolean {
-  let current: ts.Node | undefined = node;
-  while (current && current !== source) {
-    if (namedCallable(current, compiler)) return isCurrent(current, record, source);
-    current = current.parent;
-  }
-  return record.kind === 'module';
+function owns(context: SemanticContext, node: ts.Node, record: DeclarationRecord, source: ts.SourceFile, compiler: typeof ts): boolean {
+  const start = compiler.getLineAndCharacterOfPosition(source, node.getStart(source));
+  const owner = context.source.ownerForSpan(record.file, { line: start.line + 1, offset: start.character + 1 });
+  return owner.kind === 'module' ? record.kind === 'module' : owner.nameSpan.start === record.nameSpan.start && owner.nameSpan.end === record.nameSpan.end;
 }
 function isCurrent(node: ts.Node, record: DeclarationRecord, source: ts.SourceFile): boolean {
   const name = (node as ts.NamedDeclaration).name;

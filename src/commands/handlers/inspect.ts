@@ -81,7 +81,7 @@ async function references(context: Parameters<SemanticHandler>[0], record: Decla
   for (const ref of refs) {
     const displayPath = relative(context.root, ref.file);
     if (!matchesPathFilters(displayPath, filters)) continue;
-    const owner = context.source.declarationAt(ref.file, ref.start.line, ref.start.offset);
+    const owner = context.source.ownerForSpan(ref.file, ref.start);
     const qualifiedName = owner?.containerName ? `${owner.containerName}.${owner.name}` : owner?.name ?? pathName(displayPath);
     const kind = owner?.kind ?? 'module';
     const role = roleAt(context, ref.file, ref.start.line, ref.start.offset, ref.isDefinition === true, ref.isWriteAccess === true);
