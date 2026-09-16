@@ -26,6 +26,9 @@ class Worker extends Parent implements Contract {
   base(): void {}
 }
 function invoke(value: Contract): void { value.work(); }
+export
+  async function spread(): Promise<void> {
+}
 `);
   return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
@@ -44,6 +47,8 @@ test('build persists heritage edges, dispatch calls, and a null module container
     assert.equal(query(store, "MATCH (d:Declaration {kind: 'module'}) RETURN d.container AS container")[0]?.container, null);
     assert.equal(query(store, 'MATCH (:Declaration)-[r:CALLS {dispatch: true}]->() RETURN count(r) AS count')[0]?.count, 1);
     assert.equal(query(store, 'MATCH (:Declaration)-[r:IMPORTS]->() RETURN r.names AS names')[0]?.names, 'one, two as second');
+    const spread = query(store, "MATCH (d:Declaration {name: 'spread'}) RETURN d.line AS line, d.endLine AS endLine, d.lines AS lines")[0]!;
+    assert.deepEqual(spread, { line: 14, endLine: 15, lines: 3 });
   } finally {
     store.close();
     program.close();

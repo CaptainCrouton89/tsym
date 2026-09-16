@@ -229,6 +229,7 @@ function declarationSymbolTargets(states: readonly FileState[]): Map<number, str
 
 function declarationNode(state: FileState, descriptor: KeyedDeclaration): DeclarationNode {
   const name = state.source.getLineAndCharacterOfPosition(descriptor.nameStart);
+  const start = state.source.getLineAndCharacterOfPosition(descriptor.start);
   const end = state.source.getLineAndCharacterOfPosition(descriptor.end);
   const declaration = state.nodesByStart.get(descriptor.start);
   const kind = declarationKind(descriptor, declaration);
@@ -248,7 +249,8 @@ function declarationNode(state: FileState, descriptor: KeyedDeclaration): Declar
     line: descriptor.scope === 'module' ? 0 : name.line + 1,
     col: descriptor.scope === 'module' ? 0 : name.character + 1,
     endLine: end.line + 1,
-    lines: Math.max(1, end.line - name.line + 1),
+    // The full declaration span (modifiers and decorators included): `show` recovers its first line as `endLine - lines + 1`.
+    lines: Math.max(1, end.line - start.line + 1),
     declCount: 1,
     container,
   };
