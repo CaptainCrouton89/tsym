@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import type * as ts from 'typescript';
+import type * as ts from 'ts5';
 
 export interface SourceSpan { start: number; end: number; }
 export interface SyntaxDeclaration { name: string; kind: string; nameSpan: SourceSpan; span: SourceSpan; containerName?: string; }

@@ -65,11 +65,11 @@ function discoverConfigs(root: string): string[] {
   return configs.sort();
 }
 
-function candidateForConfig(config: string, compiler: typeof import('typescript')): string | null {
+function candidateForConfig(config: string, compiler: typeof import('ts5')): string | null {
   const read = compiler.readConfigFile(config, compiler.sys.readFile);
   if (read.error || !read.config) return null;
   const parsed = compiler.parseJsonConfigFileContent(read.config, compiler.sys, path.dirname(config), undefined, config);
   return parsed.fileNames.find((file) => sourceExtensions.has(path.extname(file)) && existsSync(file)) ?? null;
 }
 
-function compilerFor(tsserver: string): typeof import('typescript') { return createRequire(import.meta.url)(tsserver.replace(/tsserver\.js$/, 'typescript.js')) as typeof import('typescript'); }
+function compilerFor(tsserver: string): typeof import('ts5') { return createRequire(import.meta.url)(tsserver.replace(/tsserver\.js$/, 'typescript.js')) as typeof import('ts5'); }

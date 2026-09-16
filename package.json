@@ -23,9 +23,9 @@
     "access": "public"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc",
+    "build": "rm -rf dist && node node_modules/ts5/bin/tsc",
     "prepack": "npm run build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node node_modules/ts5/bin/tsc --noEmit",
     "test": "node --test --import tsx test/*.test.ts",
     "dev": "tsx src/cli.ts",
     "validate:crouter": "tsx scripts/validate-crouter.ts"
@@ -35,7 +35,9 @@
   },
   "dependencies": {
     "@ast-grep/napi": "^0.45.3",
-    "typescript": "^5.7.0"
+    "@ladybugdb/core": "0.20.4",
+    "ts5": "npm:typescript@5.9.3",
+    "typescript": "7.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

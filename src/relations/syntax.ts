@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import type * as ts from 'typescript';
+import type * as ts from 'ts5';
 import type { DeclarationRecord } from '../core/declarations.js';
 import type { SemanticContext } from '../server/context.js';
 

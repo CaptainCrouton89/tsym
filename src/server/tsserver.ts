@@ -173,7 +173,7 @@ function asError(value: unknown): Error { return value instanceof Error ? value 
 
 export function resolveTsserver(root: string): TsServerLocation {
   const workspace = path.join(root, 'node_modules', 'typescript', 'lib', 'tsserver.js');
-  const serverPath = existsSync(workspace) ? workspace : createRequire(import.meta.url).resolve('typescript/lib/tsserver.js');
+  const serverPath = existsSync(workspace) ? workspace : createRequire(import.meta.url).resolve('ts5/lib/tsserver.js');
   const compiler = createRequire(import.meta.url)(serverPath.replace(/tsserver\.js$/, 'typescript.js')) as { version: string };
   return { path: serverPath, version: compiler.version };
 }
