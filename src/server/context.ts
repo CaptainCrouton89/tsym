@@ -1,5 +1,6 @@
 import { DeclarationResolver } from '../core/declarations.js';
 import { SourceReader } from '../core/source.js';
+import { Ts7Host } from '../ts7/api.js';
 import { ProjectRegistry } from './projects.js';
 import { TsServerSession } from './tsserver.js';
 
@@ -7,6 +8,7 @@ import { TsServerSession } from './tsserver.js';
 export interface SemanticContext {
   root: string;
   session: TsServerSession;
+  program: Ts7Host;
   projects: ProjectRegistry;
   resolver: DeclarationResolver;
   source: SourceReader;
@@ -15,7 +17,8 @@ export interface SemanticContext {
 export function createSemanticContext(root: string, writeLog: (chunk: Buffer) => void): SemanticContext {
   const session = new TsServerSession(root, undefined, writeLog);
   session.start();
-  const projects = new ProjectRegistry(root, session);
-  const source = new SourceReader(session.location.path);
-  return { root, session, projects, resolver: new DeclarationResolver(root, session, projects, source), source };
+  const program = new Ts7Host(root);
+  const projects = new ProjectRegistry(root, session, program);
+  const source = new SourceReader(projects);
+  return { root, session, program, projects, resolver: new DeclarationResolver(root, session, projects, source), source };
 }

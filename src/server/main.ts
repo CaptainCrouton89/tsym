@@ -5,6 +5,7 @@ import { appendFileSync, chmodSync, openSync } from 'node:fs';
 import { discoverRoot, ensureStateDirectory, idleSeconds, pathsForRoot, publishState, removeEndpoint, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, WIRE_VERSION, type WireFrame, type WireRequest, writeFrame } from './wire.js';
 import { createSemanticContext } from './context.js';
+import { Ts7ServerDiedError } from '../ts7/api.js';
 import { executeSemantic } from '../commands/handlers.js';
 import { findNode } from '../commands/tree.js';
 import type { Completion, ToolError } from '../commands/types.js';
@@ -37,7 +38,7 @@ async function main(): Promise<void> {
   }
 
   const semantic = createSemanticContext(root, (chunk) => appendFileSync(paths.log, chunk));
-  const { session, projects } = semantic;
+  const { session, program, projects } = semantic;
   const bootedAt = new Date();
   const bootedAtMonotonic = performance.now();
   let bootstrapped = false;
@@ -55,6 +56,10 @@ async function main(): Promise<void> {
   const sockets = new Set<Socket>();
   const invokeSockets = new Map<Socket, string>();
   const stopRequests: { requestId: string; socket: Socket }[] = [];
+  const closeProgram = () => {
+    try { program.close(); }
+    catch (error) { append(paths, `TypeScript 7 shutdown failure: ${safe(error)}`); }
+  };
 
   const server = createServer((socket) => {
     sockets.add(socket);
@@ -126,6 +131,7 @@ async function main(): Promise<void> {
   };
   const finishRetirement = async (preserve: ReadonlySet<Socket>) => {
     await session.stopAndWait();
+    closeProgram();
     removeEndpoint(paths);
     try { database.close(); } catch {}
     for (const socket of sockets) if (!preserve.has(socket)) socket.destroy();
@@ -149,6 +155,7 @@ async function main(): Promise<void> {
   const finishStop = async () => {
     if (idleTimer) clearTimeout(idleTimer);
     await session.stopAndWait();
+    closeProgram();
     removeEndpoint(paths);
     try { database.close(); } catch {}
     for (const stop of stopRequests) {
@@ -237,6 +244,10 @@ async function main(): Promise<void> {
     } catch (error) {
       if (error instanceof DeadlineExceeded && error.phase === 'project-load') {
         projectLoadTimeout();
+        return;
+      }
+      if (error instanceof Ts7ServerDiedError) {
+        if (!retired) respond(queued.socket, queued.request.requestId, toolError('server-died', 'The bundled TypeScript 7 process stopped responding after one recovery attempt.', 'Retry to start a fresh resident.'));
         return;
       }
       if (!retired) respond(queued.socket, queued.request.requestId, toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.'));

@@ -12,7 +12,7 @@ export interface NavtoItem { name: string; kind: string; kindModifiers: string; 
 export interface ReadSymbol { address: string; path: string; name: string; qualifiedName: string; kind: string; exported: boolean; span: Span; nameSpan?: Span; children: ReadSymbol[]; }
 
 const containers = new Set(['class', 'interface', 'enum', 'module']);
-const extensions = new Set(['.ts', '.tsx', '.mts', '.cts']);
+const extensions = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
 
 export function displayPath(root: string, file: string): string { return path.relative(root, file).split(path.sep).join('/'); }
 
