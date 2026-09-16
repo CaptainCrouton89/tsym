@@ -80,6 +80,7 @@ test('inspect follows both interface implementations and reports one dispatch si
     const incoming = run('inspect', 'src/inspect-dispatch.ts:2:42', '--only', 'callers', '--each', '0');
     assert.equal(incoming.status, 0);
     assert.match(incoming.stdout, /deliver[\s\S]*impl/);
+    assert.match(incoming.stdout, /deliverConcrete/);
   } finally {
     const stop = spawnSync(process.execPath, ['dist/cli.js', '--root', root, 'server', 'stop'], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } });
     void stop;
