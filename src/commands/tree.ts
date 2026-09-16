@@ -44,7 +44,7 @@ function leaf(name: string, description: string, whenToUse: string, handler: Com
 }
 
 export const commandTree: CommandDeclaration = {
-  name: 'symbols',
+  name: 'tsym',
   description: 'Symbol-level reading of a TypeScript codebase, from the compiler\'s own resolution.',
   model: 'Every answer comes from a loaded TypeScript program, not text matching. Start at outline and drill into declarations. Every printed path:line:col address is accepted by every symbol command, including a usage address. A resident server starts when a semantic command needs it and exits after idle time.',
   children: [
@@ -97,7 +97,7 @@ export function parseInvocation(argv: readonly string[], cwd: string = realpathS
   }
   const { node, consumed } = findNode(pathTokens);
   if (helpIndex >= 0) return { help: node };
-  if (node.children && consumed < pathTokens.length) return invalid(node, [{ field: 'command', received: pathTokens[consumed]!, expected: `one of ${node.children.map((child) => child.name).join(', ')}`, next: `Run symbols ${node.name === 'symbols' ? '' : node.name + ' '}-h and read the command tree.` }]);
+  if (node.children && consumed < pathTokens.length) return invalid(node, [{ field: 'command', received: pathTokens[consumed]!, expected: `one of ${node.children.map((child) => child.name).join(', ')}`, next: `Run tsym ${node.name === 'tsym' ? '' : node.name + ' '}-h and read the command tree.` }]);
   const parsed = parseArgs(noHelp.slice(consumed), node);
   if (node.children && consumed === pathTokens.length && parsed.problems.length === 0 && parsed.input.args.length === 0) return { help: node };
   const root = parsed.input.flags['--root'] as string | undefined;
@@ -123,7 +123,7 @@ function parseArgs(tokens: readonly string[], node: CommandDeclaration): { input
       const declaration = flags.get(name);
       if (!declaration) {
         const renamed = (node as CommandDeclaration & { unknownFlagNext?: Readonly<Record<string, string>> }).unknownFlagNext?.[name];
-        problems.push({ field: name, received: token, expected: `a declared flag for symbols ${[...nodePath(node), node.name].filter(Boolean).join(' ')}`, next: renamed ?? helpNext(node) });
+        problems.push({ field: name, received: token, expected: `a declared flag for tsym ${[...nodePath(node), node.name].filter(Boolean).join(' ')}`, next: renamed ?? helpNext(node) });
         continue;
       }
       const duplicated = explicit.has(name) && !declaration.repeat;
@@ -177,5 +177,5 @@ function normalizeGlobals(tokens: readonly string[]): { tokens: string[]; comman
 }
 
 function nodePath(node: CommandDeclaration): string[] { return node === commandTree ? [] : []; }
-function helpNext(node: CommandDeclaration): string { return `Run \`symbols ${node.name === 'symbols' ? '' : node.name + ' '}-h\` and read the schema before re-issuing.`; }
+function helpNext(node: CommandDeclaration): string { return `Run \`tsym ${node.name === 'tsym' ? '' : node.name + ' '}-h\` and read the schema before re-issuing.`; }
 function invalid(node: CommandDeclaration, problems: ValidationProblem[]): InvocationError { return { category: 'invocation', code: 'invalid-invocation', problems: problems.map((problem) => ({ ...problem, next: problem.next ?? helpNext(node) })) }; }

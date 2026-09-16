@@ -23,7 +23,7 @@ export function discoverRoot(input: string | undefined, cwd = process.cwd()): st
 export function pathsForRoot(root: string): ServerPaths {
   const stateBase = process.env.XDG_CACHE_HOME ?? path.join(process.env.HOME ?? '~', '.cache');
   const id = createHash('sha256').update(root).digest('hex').slice(0, 16);
-  const state = path.join(stateBase, 'symbols', id);
+  const state = path.join(stateBase, 'tsym', id);
   return { root, state, lock: path.join(state, 'lock'), port: path.join(state, 'port'), pid: path.join(state, 'pid'), log: path.join(state, 'log') };
 }
 
@@ -48,7 +48,7 @@ export function removeEndpoint(paths: ServerPaths): void {
 }
 
 export function idleSeconds(): number {
-  const configured = process.env.SYMBOLS_IDLE_SECONDS;
+  const configured = process.env.TSYM_IDLE_SECONDS;
   if (configured !== undefined && /^\d+$/.test(configured)) return Number(configured);
   return 900;
 }

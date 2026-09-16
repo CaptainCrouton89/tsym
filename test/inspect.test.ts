@@ -30,8 +30,8 @@ test('graph exclusion preserves a longer path and projection retains connecting 
 });
 
 test('inspect follows both interface implementations and reports one dispatch site', () => {
-  const root = mkdtempSync('/tmp/symbols-inspect-');
-  const cache = mkdtempSync('/tmp/symbols-inspect-cache-');
+  const root = mkdtempSync('/tmp/tsym-inspect-');
+  const cache = mkdtempSync('/tmp/tsym-inspect-cache-');
   try {
     cpSync(path.join(process.cwd(), 'test/fixture'), root, { recursive: true });
     const run = (...args: string[]) => spawnSync(process.execPath, ['dist/cli.js', '--root', root, ...args], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } });

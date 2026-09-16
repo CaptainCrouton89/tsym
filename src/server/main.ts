@@ -266,7 +266,7 @@ async function main(): Promise<void> {
   const receive = (value: unknown, socket: Socket) => {
     const request = value as Partial<WireRequest>;
     if (request.version !== WIRE_VERSION || request.root !== root || typeof request.requestId !== 'string' || !request.operation) {
-      respond(socket, typeof request.requestId === 'string' ? request.requestId : '', toolError('server-unavailable', 'The resident received an invalid wire request.', 'Retry with the installed symbols CLI.'));
+      respond(socket, typeof request.requestId === 'string' ? request.requestId : '', toolError('server-unavailable', 'The resident received an invalid wire request.', 'Retry with the installed tsym CLI.'));
       finishSocket(socket);
       return;
     }
@@ -297,14 +297,14 @@ async function main(): Promise<void> {
           const deadlineAt = active?.socket === invokeSocket ? (loading ? loadDeadlineAt : activeDeadlineAt) : undefined;
           sendPhase(invokeSocket, requestId, 'stopping', deadlineAt === undefined ? undefined : remaining(deadlineAt));
         }
-        const completion = toolError('server-unavailable', 'The resident is stopping.', 'Wait for stop to complete before invoking symbols.');
+        const completion = toolError('server-unavailable', 'The resident is stopping.', 'Wait for stop to complete before invoking tsym.');
         for (const queued of [...queue]) failQueued(queued, completion);
       }
       completeStop();
       return;
     }
     if (stopping) {
-      respond(socket, request.requestId, toolError('server-unavailable', 'The resident is stopping.', 'Wait for stop to complete before invoking symbols.'));
+      respond(socket, request.requestId, toolError('server-unavailable', 'The resident is stopping.', 'Wait for stop to complete before invoking tsym.'));
       finishSocket(socket);
       return;
     }

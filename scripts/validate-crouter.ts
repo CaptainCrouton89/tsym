@@ -27,7 +27,7 @@ function run(args: string[], cwd = root!): Run {
   roots.add(cwd);
   const start = performance.now();
   const result = spawnSync(process.execPath, [cli, '--root', cwd, ...args], { cwd, encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache }, maxBuffer: 64 * 1024 * 1024, timeout: 180_000 });
-  const value = { command: `symbols --root ${JSON.stringify(cwd)} ${args.map((arg) => JSON.stringify(arg)).join(' ')}`, stdout: result.stdout ?? '', stderr: (result.stderr ?? '') + (result.error ? `\n${result.error}` : ''), code: result.status, wall: Math.round(performance.now() - start) };
+  const value = { command: `tsym --root ${JSON.stringify(cwd)} ${args.map((arg) => JSON.stringify(arg)).join(' ')}`, stdout: result.stdout ?? '', stderr: (result.stderr ?? '') + (result.error ? `\n${result.error}` : ''), code: result.status, wall: Math.round(performance.now() - start) };
   runs.push(value);
   return value;
 }
@@ -58,7 +58,7 @@ function same(a: string[], b: string[]): boolean { return JSON.stringify([...a].
 const revision = shell(root, 'git', ['rev-parse', 'HEAD']);
 const dirty = shell(root, 'git', ['status', '--porcelain']);
 const compiler = shell(root, process.execPath, ['-p', 'require("typescript/package.json").version']);
-const header = `# Crouter validation\n\nCrouter revision: ${revision}. TypeScript: ${compiler}. Node: ${process.version}. Symbols revision: ${shell(repo, 'git', ['rev-parse', 'HEAD'])}. Host: ${os.platform()} ${os.arch()}. Started: ${new Date().toISOString()}. Private cache: ${cache}.\n\nCrouter working tree: ${dirty ? `dirty; tracked changes included in reads and the disposable rename copy:\n\n\`\`\`\n${dirty}\n\`\`\`` : 'clean'}. Spec counts remain unchanged; failures report observed values, not revised expectations. Wall time includes CLI startup; receipt time is reported separately.\n`;
+const header = `# Crouter validation\n\nCrouter revision: ${revision}. TypeScript: ${compiler}. Node: ${process.version}. tsym revision: ${shell(repo, 'git', ['rev-parse', 'HEAD'])}. Host: ${os.platform()} ${os.arch()}. Started: ${new Date().toISOString()}. Private cache: ${cache}.\n\nCrouter working tree: ${dirty ? `dirty; tracked changes included in reads and the disposable rename copy:\n\n\`\`\`\n${dirty}\n\`\`\`` : 'clean'}. Spec counts remain unchanged; failures report observed values, not revised expectations. Wall time includes CLI startup; receipt time is reported separately.\n`;
 try {
   const cold = run(['outline', 'src/core/runtime/revive.ts']);
   const baseline = run(['server', 'status']);
@@ -131,7 +131,7 @@ try {
   symlinkSync(path.join(root, 'node_modules'), path.join(copy, 'node_modules'), 'dir');
   shell(copy, 'git', ['init', '-q']);
   shell(copy, 'git', ['add', '.']);
-  shell(copy, 'git', ['-c', 'user.name=Symbols validation', '-c', 'user.email=validation@localhost', 'commit', '-qm', 'validation baseline']);
+  shell(copy, 'git', ['-c', 'user.name=tsym validation', '-c', 'user.email=validation@localhost', 'commit', '-qm', 'validation baseline']);
   const preview = run(['rename', 'reviveNode', 'relaunchNode'], copy);
   const previewClean = shell(copy, 'git', ['status', '--porcelain']) === '';
   const files = [...preview.stdout.matchAll(/<file path="([^"]+)"/g)].map((match) => match[1]!);

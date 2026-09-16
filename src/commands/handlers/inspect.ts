@@ -48,7 +48,7 @@ const handler: SemanticHandler = async (context, invocation) => {
       blocks.push({ element: 'inspect', attributes: { symbol: seed.address, name: seed.name, kind: seed.kind, depth }, text: header, children: relations });
     }
     const capped = selected.some((relation) => relation === 'refs' || relation === 'impl' || relation === 'calls' || relation === 'callers') && each > 0;
-    const rerun = capped ? `; re-run symbols inspect ${invocation.input.args.join(' ')} --only ${selected[0]} --each 0 for all rows` : '';
+    const rerun = capped ? `; re-run tsym inspect ${invocation.input.args.join(' ')} --only ${selected[0]} --each 0 for all rows` : '';
   return { data: blocks, count: answers, receipt: `${invocation.input.args.map((input, index) => `${seeds[index]!.name}: ${receiptParts.slice(index * selected.length, (index + 1) * selected.length).join(', ')}`).join('; ')}, ${Math.round(performance.now() - started)} ms${rerun}` };
 };
 

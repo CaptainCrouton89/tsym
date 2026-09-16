@@ -5,8 +5,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 test('inspect attributes private and module-scope callback callers to their syntax owners', () => {
-  const root = mkdtempSync('/tmp/symbols-callers-owner-');
-  const cache = mkdtempSync('/tmp/symbols-callers-owner-cache-');
+  const root = mkdtempSync('/tmp/tsym-callers-owner-');
+  const cache = mkdtempSync('/tmp/tsym-callers-owner-cache-');
   const run = (...args: string[]) => spawnSync(process.execPath, ['dist/cli.js', '--root', root, ...args], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } });
   try {
     cpSync(path.join(process.cwd(), 'test/fixture'), root, { recursive: true });

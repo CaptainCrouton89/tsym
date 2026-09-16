@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 function setup() {
-  const temp = mkdtempSync(path.join(tmpdir(), 'symbols-type-check-'));
+  const temp = mkdtempSync(path.join(tmpdir(), 'tsym-type-check-'));
   const root = path.join(temp, 'fixture');
   const cache = mkdtempSync(path.join(tmpdir(), 's-'));
   cpSync('test/fixture', root, { recursive: true });

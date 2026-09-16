@@ -5,8 +5,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 test('inspect owns calls in function expression contexts and excludes concrete declarations from impl', () => {
-  const root = mkdtempSync('/tmp/symbols-inspect-relations-');
-  const cache = mkdtempSync('/tmp/symbols-inspect-relations-cache-');
+  const root = mkdtempSync('/tmp/tsym-inspect-relations-');
+  const cache = mkdtempSync('/tmp/tsym-inspect-relations-cache-');
   const run = (...args: string[]) => spawnSync(process.execPath, ['dist/cli.js', '--root', root, ...args], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } });
   try {
     cpSync(path.join(process.cwd(), 'test/fixture'), root, { recursive: true });

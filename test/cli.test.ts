@@ -9,7 +9,7 @@ function run(...args: string[]) {
 test('CLI renders declaration-driven help and complete schema failures with one receipt', () => {
   const root = run('-h');
   assert.equal(root.status, 0);
-  assert.match(root.stdout, /<command name="symbols"/);
+  assert.match(root.stdout, /<command name="tsym"/);
   assert.match(root.stdout, /<server state="stopped"\/>/);
   assert.doesNotMatch(root.stdout, /<input>/);
   assert.equal(root.stderr.trim().split('\n').length, 1);

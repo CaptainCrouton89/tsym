@@ -9,8 +9,8 @@ import { applyRenamePlan, type RenameFileOperations, type RenamePlan } from '../
 const scratch = path.join(process.env.HOME!, '.crouter', 'canvas', 'scratch');
 
 function copiedFixture(): { root: string; cache: string; close: () => void } {
-  const root = mkdtempSync(path.join(scratch, 'symbols-rename-fixture-'));
-  const cache = mkdtempSync(path.join(scratch, 'symbols-rename-cache-'));
+  const root = mkdtempSync(path.join(scratch, 'tsym-rename-fixture-'));
+  const cache = mkdtempSync(path.join(scratch, 'tsym-rename-cache-'));
   cpSync('test/fixture', root, { recursive: true });
   renameSync(path.join(root, 'src/rename-shorthand.rename.ts.txt'), path.join(root, 'src/rename-shorthand.ts'));
   renameSync(path.join(root, 'src/rename-string-literal.rename.ts.txt'), path.join(root, 'src/rename-string-literal.ts'));
@@ -155,6 +155,6 @@ function assertSources(root: string, originals: ReadonlyMap<string, Buffer>): vo
 function assertNoStagedFiles(root: string): void {
   for (const file of ['src/rename-shorthand.ts', 'src/rename-string-literal.ts']) {
     const directory = path.dirname(path.join(root, file));
-    assert.equal(readdirSync(directory).some((entry) => entry.includes('.symbols-rename-')), false);
+    assert.equal(readdirSync(directory).some((entry) => entry.includes('.tsym-rename-')), false);
   }
 }

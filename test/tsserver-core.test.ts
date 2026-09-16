@@ -11,7 +11,7 @@ import { ProjectRegistry } from '../src/server/projects.js';
 import { TsServerSession } from '../src/server/tsserver.js';
 
 test('tsserver bootstrap retains its document and canonicalizes declaration and usage addresses', async () => {
-  const temp = mkdtempSync(path.join(tmpdir(), 'symbols-project-'));
+  const temp = mkdtempSync(path.join(tmpdir(), 'tsym-project-'));
   const root = path.join(temp, 'fixture');
   cpSync('test/fixture', root, { recursive: true });
   const session = new TsServerSession(root);
@@ -33,7 +33,7 @@ test('tsserver bootstrap retains its document and canonicalizes declaration and 
 });
 
 test('geterrForProject resolves on its requestCompleted event with every diagnostic event collected, then frees the request slot', async () => {
-  const temp = mkdtempSync(path.join(tmpdir(), 'symbols-geterr-'));
+  const temp = mkdtempSync(path.join(tmpdir(), 'tsym-geterr-'));
   const root = path.join(temp, 'fixture');
   cpSync('test/fixture', root, { recursive: true });
   writeFileSync(path.join(root, 'src', 'broken.ts'), 'export const n: number = "text";\n');
@@ -121,11 +121,11 @@ test('a resolver rejection inside a handler becomes an exit-2 invocation error, 
   assert.equal(completionCode(ambiguous), 2);
   const missing = declarationError(new DeclarationError('no-such-path', 'nope does not exist.'), invocation);
   assert.equal(missing.problems[0].expected, 'an existing file or directory under --root');
-  assert.match(missing.problems[0].next!, /symbols show -h/);
+  assert.match(missing.problems[0].next!, /tsym show -h/);
 });
 
 test('a bare name with several navto candidates is resolved one request at a time and reports the candidates', async () => {
-  const temp = mkdtempSync(path.join(tmpdir(), 'symbols-ambiguous-'));
+  const temp = mkdtempSync(path.join(tmpdir(), 'tsym-ambiguous-'));
   const root = path.join(temp, 'fixture');
   cpSync('test/fixture', root, { recursive: true });
   writeFileSync(path.join(root, 'src', 'dup-a.ts'), 'export const dup = 1;\n');

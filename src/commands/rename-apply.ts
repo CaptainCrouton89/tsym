@@ -59,7 +59,7 @@ export async function applyRenamePlan(plan: RenamePlan, operations: RenameFileOp
       if (!original.equals(Buffer.from(file.snapshot, 'base64'))) return writeFailure(`The source changed after the rename preview: ${file.path}.`, 'Re-run rename to produce a plan for the current source.');
       const replacement = applyEdits(original, file);
       const metadata = await operations.stat(absolute);
-      const suffix = `.symbols-rename-${randomUUID()}`;
+      const suffix = `.tsym-rename-${randomUUID()}`;
       prepared.push({ file, original, replacement, mode: metadata.mode & 0o7777, temp: `${absolute}${suffix}.new`, restore: `${absolute}${suffix}.restore`, replaced: false });
     }
 

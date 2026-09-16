@@ -12,7 +12,7 @@ function run(cache: string, ...args: string[]) {
 }
 
 test('resident status, lazy start, and stop use a private cache', async () => {
-  const cache = mkdtempSync(path.join(tmpdir(), 'symbols-test-'));
+  const cache = mkdtempSync(path.join(tmpdir(), 'tsym-test-'));
   try {
     const stopped = run(cache, 'server', 'status');
     assert.equal(stopped.status, 1);

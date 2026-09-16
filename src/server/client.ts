@@ -148,9 +148,9 @@ function deadlineFailure(paths: ServerPaths, deadline: DeadlineExpired): ToolErr
 }
 
 function stoppingFailure(paths: ServerPaths): ToolError {
-  return { category: 'tool', code: 'server-unavailable', message: 'The resident stopped before completing the request.', logPath: paths.log, next: 'Wait for stop to complete before invoking symbols.' };
+  return { category: 'tool', code: 'server-unavailable', message: 'The resident stopped before completing the request.', logPath: paths.log, next: 'Wait for stop to complete before invoking tsym.' };
 }
 
 function unavailable(paths: ServerPaths, error: unknown): ToolError {
-  return { category: 'tool', code: 'server-unavailable', message: 'The resident server could not be reached.', logPath: paths.log, received: error instanceof Error ? error.message : String(error), expected: 'a ready resident for this workspace', next: 'Run `symbols server status`; do not delete the lock file.' };
+  return { category: 'tool', code: 'server-unavailable', message: 'The resident server could not be reached.', logPath: paths.log, received: error instanceof Error ? error.message : String(error), expected: 'a ready resident for this workspace', next: 'Run `tsym server status`; do not delete the lock file.' };
 }

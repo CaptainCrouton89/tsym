@@ -11,7 +11,7 @@ const modules: Record<HandlerName, () => Promise<{ default: SemanticHandler }>> 
 
 export async function executeSemantic(context: SemanticContext, invocation: Invocation): Promise<Completion> {
   const handler = invocation.declaration.handler;
-  if (!handler) return { category: 'tool', code: 'not-implemented', message: `symbols ${invocation.path.join(' ')} has no handler.`, next: 'Register an executable leaf handler.' };
+  if (!handler) return { category: 'tool', code: 'not-implemented', message: `tsym ${invocation.path.join(' ')} has no handler.`, next: 'Register an executable leaf handler.' };
   try {
     return await (await modules[handler]()).default(context, invocation);
   } catch (error) {
@@ -26,7 +26,7 @@ export async function executeSemantic(context: SemanticContext, invocation: Invo
  * `InvocationError` themselves when they know a sharper field or next step.
  */
 export function declarationError(error: DeclarationError, invocation: Invocation): InvocationError {
-  const leaf = `symbols ${invocation.path.join(' ')}`;
+  const leaf = `tsym ${invocation.path.join(' ')}`;
   const expected: Record<DeclarationError['code'], string> = {
     'no-such-path': 'an existing file or directory under --root',
     'not-in-program': 'a file that a tsconfig under --root includes',
