@@ -18,7 +18,8 @@ const handler: SemanticHandler = async (context, invocation) => {
   const depth = invocation.input.flags['--depth'] as number;
   const graphMode = invocation.input.flags['--graph'] === true;
   const filters = { in: strings(invocation.input.flags['--in']), exclude: strings(invocation.input.flags['--exclude']) };
-  const seeds = await Promise.all(invocation.input.args.map((input) => context.resolver.resolve(input)));
+  const seeds: DeclarationRecord[] = [];
+  for (const input of invocation.input.args) seeds.push(await context.resolver.resolve(input));
     if (graphMode) return graphAnswer(context, seeds, selected, depth, filters, started);
     const blocks: OutputNode[] = [];
     let answers = 0;
@@ -52,7 +53,8 @@ const handler: SemanticHandler = async (context, invocation) => {
 };
 
 async function graphAnswer(context: Parameters<SemanticHandler>[0], seeds: DeclarationRecord[], selected: readonly Relation[], depth: number, filters: { in: string[]; exclude: string[] }, started: number): Promise<Answer> {
-  const relations = await Promise.all(selected.filter((relation): relation is 'callers' | 'calls' => relation === 'callers' || relation === 'calls').map((relation) => traverse(context, seeds, relation, depth, filters)));
+  const relations: TraversalResult[] = [];
+  for (const relation of selected) if (relation === 'callers' || relation === 'calls') relations.push(await traverse(context, seeds, relation, depth, filters));
   const graph = mergeGraphs(relations.map((result) => result.graph));
   const count = relations.reduce((sum, result) => sum + result.rows.length, 0);
   const unresolved = new Set(graph.unresolved.map((site) => site.siteId)).size;
