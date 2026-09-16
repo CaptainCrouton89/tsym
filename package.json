@@ -19,8 +19,12 @@
     "bin",
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "rm -rf dist && tsc",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "node --test --import tsx test/*.test.ts",
     "dev": "tsx src/cli.ts",
