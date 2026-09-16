@@ -80,9 +80,9 @@ export function addEdge(edges: Map<string, GraphEdge>, from: string, to: string,
 }
 
 /** Remove excluded nodes, then retain only nodes still reachable from a surviving seed. */
-export function graphAfterExclusion(graph: Graph, exclude: PathFilters['exclude']): Graph {
+export function graphAfterExclusion(graph: Graph, exclude: PathFilters['exclude'], reverseEdges = false): Graph {
   const allowed = new Set(graph.nodes.filter((node) => matchesPathFilters(node.path, { exclude })).map((node) => node.id));
-  const { children } = traversalLinks(graph, allowed);
+  const { children } = traversalLinks(graph, allowed, reverseEdges);
   const kept = new Set(graph.nodes.filter((node) => node.depth === 0 && allowed.has(node.id)).map((node) => node.id));
   const frontier = [...kept];
   for (let i = 0; i < frontier.length; i++) {
@@ -97,9 +97,9 @@ export function graphAfterExclusion(graph: Graph, exclude: PathFilters['exclude'
 }
 
 /** Keep returned rows, every seed, and the connecting paths between them. */
-export function graphForItems(graph: Graph, rowIds: ReadonlySet<string>): Graph {
+export function graphForItems(graph: Graph, rowIds: ReadonlySet<string>, reverseEdges = false): Graph {
   const ids = new Set(graph.nodes.map((node) => node.id));
-  const { parents } = traversalLinks(graph, ids);
+  const { parents } = traversalLinks(graph, ids, reverseEdges);
   const kept = new Set(graph.nodes.filter((node) => node.depth === 0).map((node) => node.id));
   const frontier = [...rowIds].filter((id) => ids.has(id));
   for (let i = 0; i < frontier.length; i++) {
@@ -121,8 +121,7 @@ export function graphForItems(graph: Graph, rowIds: ReadonlySet<string>): Graph 
   };
 }
 
-function traversalLinks(graph: Graph, allowed: ReadonlySet<string>): { children: Map<string, string[]>; parents: Map<string, string[]> } {
-  const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+function traversalLinks(graph: Graph, allowed: ReadonlySet<string>, reverseEdges: boolean): { children: Map<string, string[]>; parents: Map<string, string[]> } {
   const children = new Map<string, string[]>();
   const parents = new Map<string, string[]>();
   const link = (parent: string, child: string): void => {
@@ -131,14 +130,8 @@ function traversalLinks(graph: Graph, allowed: ReadonlySet<string>): { children:
   };
   for (const edge of graph.edges) {
     if (!allowed.has(edge.from) || !allowed.has(edge.to)) continue;
-    const from = nodes.get(edge.from)!;
-    const to = nodes.get(edge.to)!;
-    if (from.depth < to.depth) link(edge.from, edge.to);
-    else if (to.depth < from.depth) link(edge.to, edge.from);
-    else {
-      link(edge.from, edge.to);
-      link(edge.to, edge.from);
-    }
+    if (reverseEdges) link(edge.to, edge.from);
+    else link(edge.from, edge.to);
   }
   return { children, parents };
 }

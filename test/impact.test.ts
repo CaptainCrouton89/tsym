@@ -72,6 +72,28 @@ test('--in projects impact rows after traversal and retains connecting nodes', a
   assert.equal(filtered.receipt.unresolved, filtered.graph!.unresolved.length);
 });
 
+test('--exclude retains impact nodes reachable by a longer path', async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ast-impact-exclude-'));
+  try {
+    writeFileSync(path.join(root, 'tsconfig.json'), '{"compilerOptions":{"module":"NodeNext","moduleResolution":"NodeNext","target":"ES2022"}}');
+    const sources = {
+      'it.ts': 'export function impactTarget() {}',
+      'ia.ts': "import { impactTarget } from './it.js'; export function ia() { impactTarget(); }",
+      'id.ts': "import { impactTarget } from './it.js'; export function id() { impactTarget(); }",
+      'ib.ts': "import { ia } from './ia.js'; import { ie } from './ie.js'; export function ib() { ia(); ie(); }",
+      'ic.ts': "import { id } from './id.js'; export function ic() { id(); }",
+      'ie.ts': "import { ic } from './ic.js'; export function ie() { ic(); }",
+    };
+    for (const [file, source] of Object.entries(sources)) writeFileSync(path.join(root, file), source);
+    const result = await openWorkspace(root).impact('impactTarget', { depth: 4, exclude: 'ia.ts' });
+    assert.ok(result.items.some((item) => item.name === 'ib'));
+    assert.equal(result.receipt.excluded, 1);
+    assertConnectedToSeed(result.graph!);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('module graph nodes use an address that cannot collide with a declaration', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'ast-module-node-'));
   try {
@@ -103,15 +125,12 @@ test('module graph nodes use an address that cannot collide with a declaration',
 });
 
 function assertConnectedToSeed(graph: NonNullable<Awaited<ReturnType<typeof ast.impact>>['graph']>): void {
-  const neighbors = new Map<string, string[]>();
-  for (const edge of graph.edges) {
-    neighbors.set(edge.from, [...(neighbors.get(edge.from) ?? []), edge.to]);
-    neighbors.set(edge.to, [...(neighbors.get(edge.to) ?? []), edge.from]);
-  }
+  const children = new Map<string, string[]>();
+  for (const edge of graph.edges) children.set(edge.to, [...(children.get(edge.to) ?? []), edge.from]);
   const seen = new Set(graph.nodes.filter((node) => node.depth === 0).map((node) => node.id));
   const frontier = [...seen];
   for (let i = 0; i < frontier.length; i++) {
-    for (const id of neighbors.get(frontier[i]!) ?? []) {
+    for (const id of children.get(frontier[i]!) ?? []) {
       if (!seen.has(id)) {
         seen.add(id);
         frontier.push(id);

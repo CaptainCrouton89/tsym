@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import { renderGraph } from '../src/core/render-graph.js';
-import { EmptySymbolList } from '../src/index.js';
+import { EmptySymbolList, openWorkspace } from '../src/index.js';
 import { ast } from './_fixture.js';
 
 test('trace follows callees breadth-first, keeps the shallowest row, and records dispatch sites', async () => {
@@ -91,6 +94,28 @@ test('--in projects trace rows after traversal and retains connecting nodes', as
   assert.match(graph, /class n_[0-9a-f]+ connecting/);
 });
 
+test('--exclude retains trace nodes reachable by a longer path', async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ast-trace-exclude-'));
+  try {
+    writeFileSync(path.join(root, 'tsconfig.json'), '{"compilerOptions":{"module":"NodeNext","moduleResolution":"NodeNext","target":"ES2022"}}');
+    const sources = {
+      'ts.ts': "import { ta } from './ta.js'; import { td } from './td.js'; export function traceSeed() { ta(); td(); }",
+      'ta.ts': "import { tb } from './tb.js'; export function ta() { tb(); }",
+      'tb.ts': 'export function tb() {}',
+      'td.ts': "import { tc } from './tc.js'; export function td() { tc(); }",
+      'tc.ts': "import { te } from './te.js'; export function tc() { te(); }",
+      'te.ts': "import { tb } from './tb.js'; export function te() { tb(); }",
+    };
+    for (const [file, source] of Object.entries(sources)) writeFileSync(path.join(root, file), source);
+    const result = await openWorkspace(root).trace('traceSeed', { depth: 4, exclude: 'ta.ts' });
+    assert.ok(result.items.some((item) => item.name === 'tb'));
+    assert.equal(result.receipt.excluded, 1);
+    assertConnectedToSeed(result.graph!);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('renderGraph groups declarations by directory and shows unresolved edges', async () => {
   const result = await ast.trace('describe');
   assert.ok(result.graph);
@@ -107,15 +132,12 @@ function assertRowsMatchGraph(result: Awaited<ReturnType<typeof ast.trace>>): vo
 }
 
 function assertConnectedToSeed(graph: NonNullable<Awaited<ReturnType<typeof ast.trace>>['graph']>): void {
-  const neighbors = new Map<string, string[]>();
-  for (const edge of graph.edges) {
-    neighbors.set(edge.from, [...(neighbors.get(edge.from) ?? []), edge.to]);
-    neighbors.set(edge.to, [...(neighbors.get(edge.to) ?? []), edge.from]);
-  }
+  const children = new Map<string, string[]>();
+  for (const edge of graph.edges) children.set(edge.from, [...(children.get(edge.from) ?? []), edge.to]);
   const seen = new Set(graph.nodes.filter((node) => node.depth === 0).map((node) => node.id));
   const frontier = [...seen];
   for (let i = 0; i < frontier.length; i++) {
-    for (const id of neighbors.get(frontier[i]!) ?? []) {
+    for (const id of children.get(frontier[i]!) ?? []) {
       if (!seen.has(id)) {
         seen.add(id);
         frontier.push(id);
