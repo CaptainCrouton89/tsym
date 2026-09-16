@@ -200,6 +200,53 @@ test('a HEAD move emits a git invalidation batch for post-refresh checkpoint ing
   }
 });
 
+test('a linked worktree refreshes for its nested current branch and ignores another branch ref', async () => {
+  const subject = fixture('export function watched() {}\n');
+  const worktree = mkdtempSync(path.join(tmpdir(), 'tsym-linked-worktree-'));
+  rmSync(worktree, { recursive: true, force: true });
+  let program: Ts7Host | undefined;
+  let watcher: ReturnType<typeof watchIndex> | undefined;
+  const prior = process.env.TSYM_DEBOUNCE_MS;
+  process.env.TSYM_DEBOUNCE_MS = '20';
+  const batches: WatchBatch[] = [];
+  let notify = () => {};
+  const waitForBatch = () => new Promise<void>((resolve) => { notify = resolve; });
+  const awaitBatch = (arrived: Promise<void>) => Promise.race([arrived, new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`watch batches: ${JSON.stringify(batches)}`)), 5_000).unref())]);
+  try {
+    subject.commit('initial');
+    exec(subject.root, ['worktree', 'add', '-b', 'watched', worktree]);
+    program = new Ts7Host(worktree);
+    const projects = new ConfiguredProjects(worktree, program);
+    projects.load();
+    watcher = watchIndex(worktree, projects, async (batch) => { batches.push(batch); if (batch.git) notify(); }, (error) => { throw error; }, () => {});
+    const watchedAdvance = waitForBatch();
+    exec(worktree, ['commit', '--allow-empty', '-m', 'advance watched']);
+    await awaitBatch(watchedAdvance);
+    assert.equal(batches.length, 1);
+    batches.length = 0;
+    const switched = waitForBatch();
+    exec(worktree, ['checkout', '-b', 'topic/nested']);
+    await awaitBatch(switched);
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0]?.git, true);
+    batches.length = 0;
+    const nestedAdvance = waitForBatch();
+    exec(worktree, ['commit', '--allow-empty', '-m', 'advance nested']);
+    await awaitBatch(nestedAdvance);
+    assert.equal(batches.length, 1);
+    batches.length = 0;
+    exec(subject.root, ['update-ref', 'refs/heads/unrelated', git(worktree, ['rev-parse', 'HEAD']).trim()]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    assert.deepEqual(batches, []);
+  } finally {
+    watcher?.close();
+    program?.close();
+    exec(subject.root, ['worktree', 'remove', '--force', worktree]);
+    if (prior === undefined) delete process.env.TSYM_DEBOUNCE_MS; else process.env.TSYM_DEBOUNCE_MS = prior;
+    subject.cleanup();
+  }
+});
+
 test('source drift reuses the graph shape and requests a refresh', () => {
   const subject = fixture('export function source() {}\n');
   const program = new Ts7Host(subject.root);

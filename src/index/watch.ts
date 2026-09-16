@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { existsSync, statSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { discoverDirectories, type ConfiguredProjects } from '../ts7/projects.js';
 
@@ -20,6 +20,7 @@ type FileEvent = 'changed' | 'created' | 'deleted';
 export function watchIndex(root: string, projects: ConfiguredProjects, refresh: (batch: WatchBatch) => Promise<void>, reportError: (error: unknown) => void, markStale: (flush: () => Promise<void>) => void): IndexWatcher {
   let knownFiles = new Set<string>();
   let watchers: FSWatcher[] = [];
+  let gitWatcher: { close(): void } | undefined;
   let timer: NodeJS.Timeout | undefined;
   let firstEventAt: number | undefined;
   let invalidated = false;
@@ -31,6 +32,7 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
 
   const resetDirectories = () => {
     for (const watcher of watchers) watcher.close();
+    gitWatcher?.close();
     const sourceFiles = projects.records().flatMap((project) => [...project.files]);
     const configs = projects.records().map((project) => project.config);
     // Configs are known files: rewriting one is a change, and calling it a creation leaves TypeScript on the stale config.
@@ -50,7 +52,7 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
       if (existsSync(file)) record(file, known ? 'changed' : 'created', configuration || !known);
       else record(file, 'deleted', configuration || known);
     }));
-    watchers.push(...watchGit(root, () => { git = true; invalidate(); }));
+    gitWatcher = watchGit(root, () => { git = true; invalidate(); });
   };
 
   function record(file: string, event: FileEvent, requiresFull: boolean): void {
@@ -104,6 +106,7 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
     close() {
       if (timer) clearTimeout(timer);
       for (const watcher of watchers) watcher.close();
+      gitWatcher?.close();
     },
     refresh: resetDirectories,
   };
@@ -114,26 +117,50 @@ function isDirectory(file: string): boolean {
   catch { return false; }
 }
 
-function watchGit(root: string, changed: () => void): FSWatcher[] {
-  let gitDir: string;
-  try { gitDir = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
-  catch { return []; }
-  const absolute = path.resolve(root, gitDir);
-  const paths = [path.join(absolute, 'HEAD'), path.join(absolute, 'packed-refs'), ...directories(path.join(absolute, 'refs'))];
-  const watchers: FSWatcher[] = [];
-  for (const target of paths) {
-    if (!existsSync(target)) continue;
-    try { watchers.push(watch(target, changed)); }
-    catch { /* A ref can disappear while its branch changes; the remaining HEAD/ref watchers still trigger. */ }
-  }
-  return watchers;
+function watchGit(root: string, changed: () => void): { close(): void } {
+  let state = gitState(root);
+  const gitDir = gitPath(root, '--git-dir');
+  const commonDir = gitPath(root, '--git-common-dir');
+  let watchers: FSWatcher[] = [];
+  const bind = () => {
+    for (const watcher of watchers) watcher.close();
+    const paths = new Set([
+      gitDir === undefined ? undefined : path.join(gitDir, 'HEAD'),
+      commonDir === undefined ? undefined : path.join(commonDir, 'packed-refs'),
+      commonDir === undefined ? undefined : path.join(commonDir, 'refs', 'heads'),
+      commonDir === undefined || state.ref === undefined ? undefined : path.dirname(path.join(commonDir, state.ref)),
+      commonDir === undefined || state.ref === undefined ? undefined : path.join(commonDir, state.ref),
+    ].filter((target): target is string => target !== undefined));
+    watchers = [];
+    for (const target of paths) {
+      if (!existsSync(target)) continue;
+      try { watchers.push(watch(target, check)); }
+      catch { /* A ref can disappear while its branch changes; the remaining watcher reconnects when HEAD moves. */ }
+    }
+  };
+  const check = () => {
+    const next = gitState(root);
+    if (next.head === state.head && next.ref === state.ref) return;
+    state = next;
+    bind();
+    changed();
+  };
+  bind();
+  return { close: () => { for (const watcher of watchers) watcher.close(); } };
 }
 
-function directories(root: string): string[] {
-  if (!isDirectory(root)) return [];
-  const result = [root];
-  for (const entry of readdirSync(root, { withFileTypes: true })) if (entry.isDirectory()) result.push(...directories(path.join(root, entry.name)));
-  return result;
+function gitState(root: string): { head: string | undefined; ref: string | undefined } {
+  return { head: gitOutput(root, ['rev-parse', 'HEAD']), ref: gitOutput(root, ['symbolic-ref', '-q', 'HEAD']) };
+}
+
+function gitPath(root: string, value: '--git-dir' | '--git-common-dir'): string | undefined {
+  const output = gitOutput(root, ['rev-parse', value]);
+  return output === undefined ? undefined : path.resolve(root, output);
+}
+
+function gitOutput(root: string, args: string[]): string | undefined {
+  try { return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
+  catch { return undefined; }
 }
 
 function configuredDebounceMs(): number {
