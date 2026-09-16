@@ -76,16 +76,17 @@ export function findNode(tokens: readonly string[]): { node: CommandDeclaration;
 export function parseInvocation(argv: readonly string[]): Invocation | InvocationError | { help: CommandDeclaration } {
   const helpIndex = argv.findIndex((token) => token === '-h' || token === '--help');
   const withoutHelp = helpIndex >= 0 ? [...argv.slice(0, helpIndex), ...argv.slice(helpIndex + 1)] : [...argv];
-  const noHelp = normalizeGlobals(withoutHelp);
+  const { tokens: noHelp, commandTokens } = normalizeGlobals(withoutHelp);
   const pathTokens: string[] = [];
-  for (const token of noHelp) {
+  for (const token of commandTokens) {
     if (token === '--' || token.startsWith('-')) break;
     pathTokens.push(token);
   }
   const { node, consumed } = findNode(pathTokens);
-  if (helpIndex >= 0 || noHelp.length === 0 || (node.children && consumed === noHelp.length)) return { help: node };
+  if (helpIndex >= 0) return { help: node };
   if (node.children && consumed < pathTokens.length) return invalid(node, [{ field: 'command', received: pathTokens[consumed]!, expected: `one of ${node.children.map((child) => child.name).join(', ')}`, next: `Run symbols ${node.name === 'symbols' ? '' : node.name + ' '}-h and read the command tree.` }]);
   const parsed = parseArgs(noHelp.slice(consumed), node);
+  if (node.children && consumed === pathTokens.length && parsed.problems.length === 0 && parsed.input.args.length === 0) return { help: node };
   const root = parsed.input.flags['--root'] as string | undefined;
   const json = parsed.input.flags['--json'] === true;
   const constraintProblems = (node.constraints ?? []).flatMap((constraint) => constraint.check(parsed.input));
@@ -108,8 +109,10 @@ function parseArgs(tokens: readonly string[], node: CommandDeclaration): { input
       const [name, inline] = token.split('=', 2);
       const declaration = flags.get(name);
       if (!declaration) { problems.push({ field: name, received: token, expected: `a declared flag for symbols ${[...nodePath(node), node.name].filter(Boolean).join(' ')}`, next: helpNext(node) }); continue; }
+      const duplicated = explicit.has(name) && !declaration.repeat;
       explicit.add(name);
       if (declaration.type === 'bool') {
+        if (duplicated) problems.push({ field: name, received: token, expected: 'one occurrence; this flag is not repeatable', next: helpNext(node) });
         if (inline !== undefined) problems.push({ field: name, received: token, expected: 'a boolean flag with no value', next: helpNext(node) });
         else values[name] = true;
         continue;
@@ -119,7 +122,7 @@ function parseArgs(tokens: readonly string[], node: CommandDeclaration): { input
       const value = parseValue(raw, declaration, problems, node);
       if (value === undefined) continue;
       if (declaration.repeat) values[name] = [...((values[name] as string[] | undefined) ?? []), String(value)];
-      else if (values[name] !== undefined && declaration.default === undefined) problems.push({ field: name, received: raw, expected: 'one value; this flag is not repeatable', next: helpNext(node) });
+      else if (duplicated) problems.push({ field: name, received: raw, expected: 'one value; this flag is not repeatable', next: helpNext(node) });
       else values[name] = value;
     } else args.push(token);
   }
@@ -143,7 +146,7 @@ function parseValue(raw: string, declaration: FlagDeclaration, problems: Validat
   return raw;
 }
 
-function normalizeGlobals(tokens: readonly string[]): string[] {
+function normalizeGlobals(tokens: readonly string[]): { tokens: string[]; commandTokens: string[] } {
   const commandTokens: string[] = [];
   const globals: string[] = [];
   for (let index = 0; index < tokens.length; index++) {
@@ -153,7 +156,7 @@ function normalizeGlobals(tokens: readonly string[]): string[] {
     if (token.startsWith('--root=')) { globals.push(token); continue; }
     commandTokens.push(token);
   }
-  return [...commandTokens, ...globals];
+  return { tokens: [...commandTokens, ...globals], commandTokens };
 }
 
 function nodePath(node: CommandDeclaration): string[] { return node === commandTree ? [] : []; }

@@ -13,25 +13,38 @@ export class TsServerSession {
   private seq = 0;
   private pending: { seq: number; resolve: (message: ProtocolMessage) => void; reject: (error: Error) => void } | null = null;
   private events: ProtocolMessage[] = [];
+  private stopping = false;
+  private onCommand: (command: string) => void = () => {};
   readonly location: TsServerLocation;
 
-  constructor(readonly root: string, location = resolveTsserver(root), private readonly onStderr: (chunk: Buffer) => void = () => {}) { this.location = location; }
+  constructor(readonly root: string, location = resolveTsserver(root), private readonly onStderr: (chunk: Buffer) => void = () => {}, private onDeath: (error: Error) => void = () => {}) { this.location = location; }
+  get pid(): number | undefined { return this.child?.pid; }
+  setDeathHandler(handler: (error: Error) => void): void { this.onDeath = handler; }
+  setCommandHandler(handler: (command: string) => void): void { this.onCommand = handler; }
 
   start(): void {
     if (this.child) return;
+    this.stopping = false;
     const child = spawn(process.execPath, [this.location.path, '--disableAutomaticTypingAcquisition'], { cwd: this.root, stdio: 'pipe' });
     this.child = child;
     child.stdout.on('data', (chunk: Buffer) => this.read(chunk));
     child.stderr.on('data', (chunk: Buffer) => this.onStderr(chunk));
-    child.on('error', (error) => this.fail(error));
-    child.on('exit', (code, signal) => this.fail(new Error(`tsserver exited (${code ?? signal ?? 'unknown'})`)));
+    child.on('error', (error) => this.died(error));
+    child.on('exit', (code, signal) => this.died(new Error(`tsserver exited (${code ?? signal ?? 'unknown'})`)));
   }
 
-  stop(): void {
+  stop(): void { void this.stopAndWait(); }
+
+  async stopAndWait(): Promise<void> {
     const child = this.child;
+    this.stopping = true;
     this.child = null;
-    if (!child) return;
-    child.kill('SIGTERM');
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise<void>((resolve) => {
+      child.once('exit', () => resolve());
+      child.once('error', () => resolve());
+      child.kill('SIGTERM');
+    });
   }
 
   async request(command: string, args: Record<string, unknown> = {}): Promise<ProtocolMessage> {
@@ -41,6 +54,7 @@ export class TsServerSession {
     const body = JSON.stringify({ seq, type: 'request', command, arguments: args }) + '\n';
     return new Promise<ProtocolMessage>((resolve, reject) => {
       this.pending = { seq, resolve, reject };
+      this.onCommand(command);
       this.child!.stdin.write(body, (error) => { if (error) this.fail(error); });
     });
   }
@@ -93,6 +107,13 @@ export class TsServerSession {
         pending.resolve(message);
       }
     }
+  }
+
+  private died(error: Error): void {
+    const child = this.child;
+    this.child = null;
+    this.fail(error);
+    if (child && !this.stopping) this.onDeath(error);
   }
 
   private fail(error: Error): void {

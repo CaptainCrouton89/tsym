@@ -4,7 +4,7 @@ import type { CommandDeclaration, FlagDeclaration } from './types.js';
 
 export function renderHelp(node: CommandDeclaration, serverState = '<server state="stopped"/>'): string {
   const lines: string[] = [];
-  if (node.model) lines.push(`<model>\n${escapeText(node.model)}${node === commandTree ? `\n\n${serverState}` : ''}\n</model>`);
+  if (node.model) lines.push(`<model>\n${escapeText(node.model)}${node === commandTree || node.state ? `\n\n${serverState}` : ''}\n</model>`);
   if (node.children) lines.push(...node.children.map((child) => `<subcommand name="${child.name}" description="${escapeText(child.description)}" whenToUse="${escapeText(child.whenToUse ?? '')}"/>`));
   if (node.argument || node.flags?.length) lines.push(`<input>\n${[node.argument ? argument(node.argument) : null, ...(node.flags ?? []).map(flag)].filter((line): line is string => line !== null).join('\n')}\n</input>`);
   if (node.output) lines.push(`<output>${escapeText(node.output)}</output>`);

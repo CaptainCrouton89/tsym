@@ -6,7 +6,10 @@ import { invokeResident, serverReload, serverStatus, serverStop } from './server
 
 async function main(argv: string[]): Promise<number> {
   const parsed = parseInvocation(argv);
-  if ('help' in parsed) return emit({ element: 'command', raw: renderHelp(parsed.help), count: 1 }, false);
+  if ('help' in parsed) {
+    const state = await helpState(rootFlag(argv));
+    return emit({ element: 'command', raw: renderHelp(parsed.help, state), count: 1 }, false);
+  }
   if ('category' in parsed) return emit(parsed, false);
   return emit(await dispatch(parsed), parsed.json);
 }
@@ -18,6 +21,22 @@ async function dispatch(invocation: Invocation): Promise<Completion> {
     case 'server-reload': return serverReload(invocation.root);
     default: return invokeResident(invocation);
   }
+}
+
+async function helpState(root: string | undefined): Promise<string> {
+  const status = await serverStatus(root);
+  if ('category' in status) return '<server state="unavailable"/>';
+  const attributes = status.attributes ?? {};
+  if (attributes.state === 'stopped') return '<server state="stopped"/>';
+  return `<server ${Object.entries(attributes).map(([key, value]) => `${key}="${String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;')}"`).join(' ')}/>`;
+}
+
+function rootFlag(argv: readonly string[]): string | undefined {
+  for (let index = 0; index < argv.length; index++) {
+    if (argv[index] === '--root') return argv[index + 1];
+    if (argv[index]?.startsWith('--root=')) return argv[index]!.slice('--root='.length);
+  }
+  return undefined;
 }
 
 function emit(completion: Completion, json: boolean): number {
