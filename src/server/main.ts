@@ -3,6 +3,9 @@ import { createServer, type Socket } from 'node:net';
 import { appendFileSync, chmodSync, openSync } from 'node:fs';
 import { discoverRoot, ensureStateDirectory, idleSeconds, pathsForRoot, publishState, removeEndpoint, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, WIRE_VERSION, type WireFrame, type WireRequest, writeFrame } from './wire.js';
+import { createSemanticContext } from './context.js';
+import { executeSemantic } from '../commands/handlers.js';
+import { findNode } from '../commands/tree.js';
 
 interface Queued { request: WireRequest; socket: Socket; }
 
@@ -21,6 +24,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const semantic = createSemanticContext(root, (chunk) => appendFileSync(paths.log, chunk));
+  const { session, projects } = semantic;
+  let bootstrapped = false;
   let stopping = false;
   let active = false;
   let queue: Queued[] = [];
@@ -37,20 +43,33 @@ async function main(): Promise<void> {
     for (const socket of sockets) { try { send(socket, { type: 'phase', requestId: '', phase: 'stopping' }); } catch {} }
     server.close();
     removeEndpoint(paths);
+    session.stop();
     try { database.close(); } catch {}
     process.exit(0);
   };
-  const processQueue = () => {
+  const processQueue = async (): Promise<void> => {
     if (active || stopping) return;
     const queued = queue.shift();
     if (!queued) { touch(); return; }
-    if (queued.socket.destroyed) { processQueue(); return; }
+    if (queued.socket.destroyed) { void processQueue(); return; }
     active = true;
     send(queued.socket, { type: 'phase', requestId: queued.request.requestId, phase: 'running', remainingMs: 120_000 });
-    const completion = { error: { category: 'tool' as const, code: 'not-implemented', message: `symbols ${queued.request.invocation?.path.join(' ') ?? 'invoke'} has no semantic handler yet.`, logPath: paths.log, next: 'Retry after the corresponding leaf handler lands.' } };
-    send(queued.socket, { type: 'response', requestId: queued.request.requestId, completion });
-    active = false;
-    processQueue();
+    try {
+      if (!bootstrapped) {
+        send(queued.socket, { type: 'phase', requestId: queued.request.requestId, phase: 'project-load-start', remainingMs: 60_000 });
+        await projects.bootstrap();
+        bootstrapped = true;
+        send(queued.socket, { type: 'phase', requestId: queued.request.requestId, phase: 'project-load-end', remainingMs: 60_000 });
+      }
+      const requestInvocation = queued.request.invocation;
+      if (!requestInvocation) throw new Error('invoke request omitted its invocation');
+      const declaration = findNode(requestInvocation.path).node;
+      const completion = await executeSemantic(semantic, { root, json: false, path: requestInvocation.path, declaration, input: { args: requestInvocation.args, flags: requestInvocation.flags, explicit: new Set(requestInvocation.explicit) } });
+      if ('category' in completion && !completion.logPath) completion.logPath = paths.log;
+      send(queued.socket, { type: 'response', requestId: queued.request.requestId, completion: 'category' in completion ? { error: completion } : { answer: completion } });
+    } catch (error) {
+      send(queued.socket, { type: 'response', requestId: queued.request.requestId, completion: { error: { category: 'tool' as const, code: 'project-load-failed', message: 'TypeScript could not load the workspace project.', logPath: paths.log, next: error instanceof Error ? error.message : 'Read the log and repair the project.' } } });
+    } finally { active = false; void processQueue(); }
   };
   const server = createServer((socket) => {
     sockets.add(socket);
@@ -69,7 +88,7 @@ async function main(): Promise<void> {
       return;
     }
     if (request.operation === 'status') {
-      send(socket, { type: 'response', requestId: request.requestId, completion: { answer: { element: 'server', attributes: { root, state: 'ready', pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s` }, count: 1 } } });
+      send(socket, { type: 'response', requestId: request.requestId, completion: { answer: { element: 'server', attributes: { root, state: 'ready', pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s`, tsserver: session.location.path, typescript: session.location.version }, count: 1 } } });
       return;
     }
     if (request.operation === 'stop') {

@@ -4,6 +4,7 @@ import { asAddresses, resolveSymbol, uniqueSymbols, type ResolveOptions } from '
 import { declarationForSymbol } from './ts-program.js';
 import type { Callee, Graph, GraphEdge, GraphNode, Result, Symbol } from './types.js';
 import type { Workspace } from './workspace.js';
+import { projectFor } from './legacy-projects.js';
 
 export interface TraceOptions extends ResolveOptions, PathFilters {
   /** How many callee levels to follow. Default 3. */
@@ -53,7 +54,7 @@ export async function trace(ws: Workspace, addresses: string | readonly string[]
   const items = [...rows.values()]
     .filter((row) => remaining.has(address(row)) && matchesPathFilters(row.path, { in: opts.in }))
     .sort(compareCallees);
-  const finished = finish({ command: 'trace', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit }, items);
+  const finished = finish({ command: 'trace', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => projectFor(ws, symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit }, items);
   const graph = graphForItems(prunedGraph, new Set(finished.items.map(address)));
   finished.receipt.excluded = rows.size - finished.items.length;
   finished.receipt.unresolved = graph.unresolved.length;

@@ -6,6 +6,7 @@ import { lineTextAt, locOf, nameIdentifier, referencesTo, type NameNode } from '
 import { addEdge, address, graphAfterExclusion, graphForItems, graphNodeFromSymbol } from './trace.js';
 import type { Caller, GraphEdge, GraphNode, Result } from './types.js';
 import type { Workspace } from './workspace.js';
+import { projectFor } from './legacy-projects.js';
 
 export interface ImpactOptions extends ResolveOptions, PathFilters {
   /** How many caller levels to follow. Default 3. */
@@ -75,7 +76,7 @@ export async function impact(ws: Workspace, addresses: string | readonly string[
   const items = [...rows.values()]
     .filter((row) => remaining.has(key(row)) && matchesPathFilters(row.path, { in: opts.in }))
     .sort(compareCallers);
-  const finished = finish({ command: 'impact', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit }, items);
+  const finished = finish({ command: 'impact', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => projectFor(ws, symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit }, items);
   const graph = graphForItems(prunedGraph, new Set(finished.items.map(key)), true);
   finished.receipt.excluded = rows.size - finished.items.length;
   finished.receipt.unresolved = graph.unresolved.length;

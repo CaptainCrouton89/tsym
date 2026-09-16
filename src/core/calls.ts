@@ -4,6 +4,7 @@ import { asAddresses, resolveSymbol, uniqueSymbols, type ResolveOptions } from '
 import { declarationForSymbol } from './ts-program.js';
 import type { Callee, Result } from './types.js';
 import type { Workspace } from './workspace.js';
+import { projectFor } from './legacy-projects.js';
 
 export interface CallsOptions extends ResolveOptions, PathFilters {
   limit?: number | null;
@@ -26,7 +27,7 @@ export async function calls(ws: Workspace, addresses: string | readonly string[]
     }
   }
   const items = [...byKey.values()].sort(compareCallees);
-  return finish({ command: 'calls', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit, unresolved, ...opts }, items);
+  return finish({ command: 'calls', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => projectFor(ws, symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit, unresolved, ...opts }, items);
 }
 
 function key(loc: { path: string; start: { line: number; col: number } }): string {

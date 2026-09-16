@@ -3,10 +3,11 @@ import { Node, type Identifier, type PrivateIdentifier, type ReferenceEntry, typ
 export type NameNode = Identifier | PrivateIdentifier;
 import type { Loc, Symbol } from './types.js';
 import type { Workspace } from './workspace.js';
+import { projectFor } from './legacy-projects.js';
 
 /** The ts-morph source file for a workspace-relative path, adding it to the program if the tsconfig excluded it. */
 export function sourceFileFor(ws: Workspace, rel: string): SourceFile {
-  const project = ws.projectFor(rel);
+  const project = projectFor(ws, rel);
   const abs = ws.abs(rel);
   return project.getSourceFile(abs) ?? project.addSourceFileAtPath(abs);
 }

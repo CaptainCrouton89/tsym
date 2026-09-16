@@ -5,6 +5,7 @@ import { asAddresses, resolveSymbol, uniqueSymbols, type ResolveOptions } from '
 import { lineTextAt, locOf, nameIdentifier, referencesTo, type NameNode } from './ts-program.js';
 import type { Caller, Result } from './types.js';
 import type { Workspace } from './workspace.js';
+import { projectFor } from './legacy-projects.js';
 
 export interface CallersOptions extends ResolveOptions, PathFilters {
   limit?: number | null;
@@ -24,7 +25,7 @@ export async function callers(ws: Workspace, addresses: string | readonly string
     }
   }
   const items = [...byKey.values()].sort(compareCallers);
-  return finish({ command: 'callers', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit, ...opts }, items);
+  return finish({ command: 'callers', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => projectFor(ws, symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit, ...opts }, items);
 }
 
 /** Direct callers of the declaration named by `id`, each carrying the identifier that names it (for recursion). */
