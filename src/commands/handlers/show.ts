@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { escapeText, xml } from '../../output.js';
 import { DeclarationError, type DeclarationRecord } from '../../core/declarations.js';
-import { declarationSpans, declarationText, lineCount, navto, navtree, normalKind, sourceSpan, type Span } from '../../read/read.js';
+import { declarationSpans, declarationText, lineCount, navto, navtree, normalKind, symbolAt, type Span } from '../../read/read.js';
 import type { SemanticContext } from '../../server/context.js';
 import type { SemanticHandler } from '../handlers.js';
 
@@ -39,7 +39,9 @@ async function resolve(context: SemanticContext, input: string): Promise<Declara
   for (const candidate of await navto(context, name)) {
     if (candidate.name !== name) continue;
     const declaration = await context.resolver.fromFileSpan(candidate);
-    if ((qualified && declaration.qualifiedName !== input) || (!qualified && declaration.qualifiedName.includes('.'))) continue;
+    const source = context.source.read(candidate.file);
+    const nested = symbolAt(context.root, candidate.file, await navtree(context, candidate.file), source, declaration.address)?.qualifiedName ?? declaration.qualifiedName;
+    if ((qualified && nested !== input) || (!qualified && nested.includes('.'))) continue;
     const resolved = await context.resolver.resolve(declaration.address);
     if (!records.some((record) => record.address === resolved.address)) records.push(resolved);
   }

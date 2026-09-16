@@ -40,13 +40,21 @@ export function readSymbols(root: string, file: string, tree: NavtreeItem, sourc
     const name = item.text;
     const nameSpan = item.nameSpan;
     const address = nameSpan ? `${displayPath(root, file)}:${nameSpan.start.line}:${nameSpan.start.offset}` : `${displayPath(root, file)}:${span.start.line}:${span.start.offset}`;
-    const children = (item.childItems ?? []).map((child) => visit(child, nameSpan ? name : container)).filter((child): child is ReadSymbol => child !== null);
+    const owner = container ? `${container}.${name}` : name;
+    const children = (item.childItems ?? []).map((child) => visit(child, owner)).filter((child): child is ReadSymbol => child !== null);
     return { address, path: displayPath(root, file), name, qualifiedName: container ? `${container}.${name}` : name, kind, exported: item.kindModifiers.split(/[\s,]+/).includes('export'), span, nameSpan, children };
   };
   return (tree.childItems ?? []).map((item) => visit(item)).filter((item): item is ReadSymbol => item !== null);
 }
 
 export function normalKind(kind: string): string { return normalizeKind(kind); }
+export function symbolAt(root: string, file: string, tree: NavtreeItem, source: string, address: string): ReadSymbol | null {
+  const visit = (items: ReadSymbol[]): ReadSymbol | null => {
+    for (const item of items) { if (item.address === address) return item; const child = visit(item.children); if (child) return child; }
+    return null;
+  };
+  return visit(readSymbols(root, file, tree, source));
+}
 export function isContainer(symbol: ReadSymbol): boolean { return containers.has(symbol.kind); }
 export function keep(symbol: ReadSymbol, flags: Record<string, boolean | number | string | string[]>): boolean {
   const kinds = flags['--kind'] as string[] | undefined;
@@ -104,7 +112,8 @@ export function declarationText(source: string, span: Span, kind: string): strin
   const lineStart = source.lastIndexOf('\n', start - 1) + 1;
   const prefix = source.slice(lineStart, start);
   const end = positionOffset(source, span.end);
-  return /^(\s*)(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+$/.test(prefix) ? source.slice(lineStart, end + (source[end] === ';' ? 1 : 0)) : sourceSpan(source, span);
+  const statementEnd = source.indexOf(';', end);
+  return /^(\s*)(?:export\s+)?(?:declare\s+)?(?:const|let|var)\b/.test(prefix) ? source.slice(lineStart, statementEnd < 0 ? end : statementEnd + 1) : sourceSpan(source, span);
 }
 
 function normalizeKind(kind: string): string {

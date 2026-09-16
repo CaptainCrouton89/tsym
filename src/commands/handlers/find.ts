@@ -1,5 +1,5 @@
 import { escapeText } from '../../output.js';
-import { displayPath, navto, normalKind } from '../../read/read.js';
+import { displayPath, navto, navtree, normalKind, readSymbols, type ReadSymbol } from '../../read/read.js';
 import { matchesPathFilters } from '../../core/receipt.js';
 import type { SemanticHandler } from '../handlers.js';
 
@@ -12,6 +12,7 @@ const handler: SemanticHandler = async (context, invocation) => {
   const qualified = name.includes('.');
   const candidates = await navto(context, qualified ? name.slice(name.lastIndexOf('.') + 1) : name);
   const rows = new Map<string, { address: string; path: string; kind: string; exported: boolean; qualifiedName: string }>();
+  const qualifiedNames = new Map<string, Map<string, string>>();
   for (const candidate of candidates) {
     const candidateName = candidate.name;
     if (prefix ? !candidateName.startsWith(qualified ? name.slice(name.lastIndexOf('.') + 1) : name) : candidateName !== (qualified ? name.slice(name.lastIndexOf('.') + 1) : name)) continue;
@@ -20,9 +21,18 @@ const handler: SemanticHandler = async (context, invocation) => {
     const relative = displayPath(context.root, candidate.file);
     if ((kinds && !kinds.includes(kind)) || !matchesPathFilters(relative, { in: flags['--in'] as string[] | undefined, exclude: flags['--exclude'] as string[] | undefined })) continue;
     const declaration = await context.resolver.fromFileSpan(candidate);
-    if (qualified && !(prefix ? declaration.qualifiedName.startsWith(name) : declaration.qualifiedName === name)) continue;
-    const sourceLine = context.source.read(candidate.file).split('\n')[candidate.start.line - 1] ?? '';
-    rows.set(declaration.address, { address: declaration.address, path: relative, kind, exported: candidate.kindModifiers.split(/[\s,]+/).includes('export') || /\bexport\b/.test(sourceLine), qualifiedName: declaration.qualifiedName });
+    const source = context.source.read(candidate.file);
+    let names = qualifiedNames.get(candidate.file);
+    if (!names) {
+      names = new Map();
+      const add = (symbol: ReadSymbol) => { names!.set(symbol.address, symbol.qualifiedName); symbol.children.forEach(add); };
+      for (const symbol of readSymbols(context.root, candidate.file, await navtree(context, candidate.file), source)) add(symbol);
+      qualifiedNames.set(candidate.file, names);
+    }
+    const qualifiedName = names.get(declaration.address) ?? declaration.qualifiedName;
+    if (qualified && !(prefix ? qualifiedName.startsWith(name) : qualifiedName === name)) continue;
+    const sourceLine = source.split('\n')[candidate.start.line - 1] ?? '';
+    rows.set(declaration.address, { address: declaration.address, path: relative, kind, exported: candidate.kindModifiers.split(/[\s,]+/).includes('export') || /\bexport\b/.test(sourceLine), qualifiedName });
   }
   const limit = flags['--limit'] as number | undefined;
   const sorted = [...rows.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || numericAddress(a.address, b.address));

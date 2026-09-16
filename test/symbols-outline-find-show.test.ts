@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, rmSync, watch } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -12,6 +12,8 @@ test('outline, find, and show use the resident compiler without opening outline 
   const root = path.join(temporary, 'fixture');
   const cache = path.join(temporary, 'cache');
   cpSync('test/fixture', root, { recursive: true });
+  writeFileSync(path.join(root, 'src/read-leaf-x&y.ts'), 'export const special = 1;\n');
+  writeFileSync(path.join(root, 'src/read-leaf-nested.ts'), 'export namespace Outer { export namespace Inner { export function deep() {} } }\nexport const multi = 1, other = 2;\n');
   try {
     const outline = run(root, cache, 'outline', 'src/greet.ts');
     assert.equal(outline.status, 0, outline.stderr);
@@ -58,6 +60,14 @@ test('outline, find, and show use the resident compiler without opening outline 
     assert.match(special.stdout, /src\/read-leaf-x&amp;y\.ts:1:14/);
     const specialSource = run(root, cache, 'show', 'src/read-leaf-x&y.ts:1:14');
     assert.match(specialSource.stdout, /export const special = 1;/);
+    const nested = run(root, cache, 'find', 'Outer.Inner.deep');
+    assert.match(nested.stdout, /Outer\.Inner\.deep/);
+    const nestedSource = run(root, cache, 'show', 'Outer.Inner.deep');
+    assert.match(nestedSource.stdout, /export function deep\(\)/);
+    const multi = run(root, cache, 'show', 'src/read-leaf-nested.ts:2:14');
+    assert.match(multi.stdout, /export const multi = 1, other = 2;/);
+    const other = run(root, cache, 'show', 'src/read-leaf-nested.ts:2:25');
+    assert.match(other.stdout, /export const multi = 1, other = 2;/);
 
     const outside = run(root, cache, 'outline', 'missing.ts');
     assert.equal(outside.status, 2);
