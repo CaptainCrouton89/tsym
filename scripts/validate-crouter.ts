@@ -10,7 +10,7 @@ const report = path.resolve(process.argv[3] ?? 'crouter-validation.md');
 if (!root || !path.isAbsolute(root) || !existsSync(path.join(root, 'package.json'))) throw new Error('Usage: npm run validate:crouter -- /absolute/crouter/root [/absolute/report.md]');
 const scratch = path.join(os.homedir(), '.crouter/canvas/scratch');
 mkdirSync(scratch, { recursive: true });
-const temporary = mkdtempSync(path.join(scratch, 'symbols-validation-'));
+const temporary = mkdtempSync(path.join(scratch, 'symval-'));
 const cache = path.join(temporary, 'cache');
 const cli = path.join(repo, 'dist/cli.js');
 const roots = new Set<string>();
@@ -85,7 +85,7 @@ try {
   const whole = run(['outline', '--depth', '2', '--exported']);
   const after = run(['server', 'status']);
   const delta = Number(attr(after.stdout, 'memory')) - baselineMemory;
-  criterion('A4', whole.code === 0 && count(whole) === 4461 && Number(attr(whole.stdout, 'files')) === 771 && /88 not in program/.test(whole.stderr) && ms(whole) < 4000 && delta < 250 * 1024 * 1024, `${count(whole)} exported rows/${attr(whole.stdout, 'files')} files; ${whole.stderr.trim()}. RSS baseline ${baselineMemory}, after ${attr(after.stdout, 'memory')}, growth ${(delta / 1024 / 1024).toFixed(1)} MiB. Expected 4461/771, 88 not in program, <4s and <250MiB growth.`, 'src/commands/handlers/outline.ts uses navtree over scope.files, not withOpen. src/server/projects.ts owns initial project bootstrap opens. Runtime RSS is wrapper plus tsserver.\n' + sourceChecks(whole), [baseline, whole, after]);
+  criterion('A4', whole.code === 0 && Number(attr(whole.stdout, 'symbols')) === 4461 && Number(attr(whole.stdout, 'files')) === 771 && /88 not in program/.test(whole.stderr) && ms(whole) < 4000 && delta < 250 * 1024 * 1024, `${attr(whole.stdout, 'symbols')} exported symbols (${count(whole)} printed declaration rows)/${attr(whole.stdout, 'files')} files; ${whole.stderr.trim()}. RSS baseline ${baselineMemory}, after ${attr(after.stdout, 'memory')}, growth ${(delta / 1024 / 1024).toFixed(1)} MiB. Expected 4461/771, 88 not in program, <4s and <250MiB growth.`, 'src/commands/handlers/outline.ts uses navtree over scope.files, not withOpen. src/server/projects.ts owns initial project bootstrap opens. Runtime RSS is wrapper plus tsserver.\n' + sourceChecks(whole), [baseline, whole, after]);
   const functions = run(['outline', '--kind', 'function', 'src/core/runtime/revive.ts']);
   const limit = run(['outline', '--limit', '3', 'src/core/runtime/revive.ts']);
   const refsGraph = run(['inspect', 'reviveNode', '--graph', '--only', 'refs']);
@@ -108,7 +108,7 @@ try {
   criterion('A8b', attr(relation(cappedRefs, 'refs'), 'count') === '90' && count(cappedRefs) === 10 && count(allRefs) === 90 && attr(relation(allRefs, 'refs'), 'shown') === '90' && cappedRefs.stderr.includes('--only refs --each 0'), `Capped ${count(cappedRefs)} rows/${attr(relation(cappedRefs, 'refs'), 'count')} total; uncapped ${count(allRefs)}. Expected 10/90 and 90.`, sourceChecks(allRefs), [cappedRefs, allRefs]);
   criterion('A9', count(find) === 3 && ['src/api/client.ts:419:3', 'src/core/runtime/revive.ts:222:23', 'src/index.ts:18:10'].every((address) => find.stdout.includes(address)), `find rows ${count(find)}; current canonical anchor ${anchor}. Recorded canonical anchor src/core/runtime/revive.ts:222:23. Exact source coordinates are compared, not rewritten.`, sourceChecks(find), [find]);
   const type = run(['type', 'reviveNode']);
-  criterion('A10', type.code === 0 && type.stdout.includes('function reviveNode(nodeId: string, opts: ReviveOptions): Promise&lt;ReviveResult&gt;') && type.stdout.includes('kind="function" modifiers="export"') && type.stdout.includes("Relaunch `nodeId`'s broker engine from its persisted recipe and update canvas meta. Opens no viewer (engine-only)."), 'Checker signature, declaration modifiers and required documentation prefix compared verbatim.', readFileSync(path.join(root, 'src/core/runtime/revive.ts'), 'utf8').split('\n').slice(Number(anchor.split(':')[1]) - 12, Number(anchor.split(':')[1]) + 2).join('\n'), [type]);
+  criterion('A10', type.code === 0 && type.stdout.includes('function reviveNode(nodeId: string, opts: ReviveOptions): Promise&lt;ReviveResult&gt;') && type.stdout.includes('kind="function" modifiers="export"') && type.stdout.includes("Relaunch `nodeId`'s broker engine from its persisted recipe and update canvas meta. Opens no viewer (engine-only)."), `Signature matches=${type.stdout.includes('function reviveNode(nodeId: string, opts: ReviveOptions): Promise&lt;ReviveResult&gt;')}; modifiers match=${type.stdout.includes('kind="function" modifiers="export"')}; documentation prefix compared verbatim, including whitespace.`, readFileSync(path.join(root, 'src/core/runtime/revive.ts'), 'utf8').split('\n').slice(Number(anchor.split(':')[1]) - 12, Number(anchor.split(':')[1]) + 2).join('\n'), [type]);
   const grep = shell(root, 'rg', ['-n', 'reviveNode', 'src/commands']).split('\n');
   const first = grep[0]!;
   const usage = grep.find((line) => !/^\s*(\/\/|\*|\/\*)/.test(line.split(':').slice(2).join(':')) && /\breviveNode\b/.test(line.split(':').slice(2).join(':')))!;
@@ -166,7 +166,7 @@ try {
   const fixtureShows = addressRows(dg).map((address) => run(['show', address], fixture));
   const sends = rows(d1).map((line) => line.split('  ')[0]!);
   const incoming = sends.map((address) => run(['inspect', address, '--only', 'callers', '--each', '0'], fixture));
-  const missing = run(['inspect', 'missing', '--only', 'calls', '--each', '0', '--graph'], fixture);
+  const missing = run(['inspect', 'missing', '--only', 'calls', '--graph'], fixture);
   const projected = run(['inspect', deliver, '--only', 'calls', '--depth', '2', '--in', 'src/inspect-dispatch.ts', '--each', '0'], fixture);
   const removed = run(['inspect', deliver, '--only', 'calls', '--depth', '2', '--exclude', 'src/inspect-dispatch.ts', '--each', '0'], fixture);
   criterion('A18', count(d1) === 2 && rows(d1).every((line) => /  1  .*impl/.test(line)) && /1 dispatch/.test(d1.stderr) && !/unresolved/.test(d1.stderr) && count(d2) === 4 && dg.stdout.includes('-.-&gt;|impl|') && fixtureShows.every((item) => item.code === 0) && incoming.every((item) => item.stdout.includes('deliver') && item.stdout.includes('impl')) && /1 unresolved, 1 dispatch/.test(missing.stderr) && missing.stdout.includes('unresolved_dispatch') && count(projected) === 4 && count(removed) === 0, `Depth 1=${count(d1)}, depth 2=${count(d2)}; ${fixtureShows.length} graph addresses shown; incoming traversals ${incoming.length}; projected=${count(projected)}, excluded=${count(removed)}. A18 fixture is checked in verbatim.`, sourceChecks(d2, fixture) + '\n' + readFileSync(path.join(fixture, 'src/inspect-dispatch.ts'), 'utf8'), [fixtureFind, d1, d2, dg, ...fixtureShows, ...incoming, missing, projected, removed]);
