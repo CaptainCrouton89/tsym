@@ -36,6 +36,8 @@ test('outline, find, and show use the resident compiler without opening outline 
     assert.match(found.stdout, /src\/greet\.ts:2:17  function  export  greet/);
     const reexport = run(root, cache, 'find', 'hello');
     assert.match(reexport.stdout, /alias  export  hello/);
+    const member = run(root, cache, 'find', 'Greeter.say');
+    assert.match(member.stdout, /Greeter\.say/);
     const missed = run(root, cache, 'find', 'doesNotExist');
     assert.equal(missed.status, 1);
     assert.match(missed.stdout, /<find name="doesNotExist" count="0"\/>/);
@@ -45,6 +47,17 @@ test('outline, find, and show use the resident compiler without opening outline 
     assert.match(shown.stdout, /<symbol at="src\/app\.ts:5:17" name="run" kind="function" lines="5">/);
     assert.match(shown.stdout, /<symbol at="src\/greet\.ts:0:0"/);
     assert.ok(shown.stdout.indexOf('name="run"') < shown.stdout.indexOf('name="greet.ts"'));
+    const memberSource = run(root, cache, 'show', 'Greeter.say');
+    assert.match(memberSource.stdout, /say\(name: string\): string/);
+    const invalidAddress = run(root, cache, 'show', 'src/greet.ts:7:14');
+    assert.equal(invalidAddress.status, 2);
+    assert.match(invalidAddress.stderr, /code="invalid-address"/);
+    const escapedOutline = run(root, cache, 'outline', 'src/read-leaf-x&y.ts');
+    assert.match(escapedOutline.stdout, /src\/read-leaf-x&amp;y\.ts:1:14/);
+    const special = run(root, cache, 'find', 'special');
+    assert.match(special.stdout, /src\/read-leaf-x&amp;y\.ts:1:14/);
+    const specialSource = run(root, cache, 'show', 'src/read-leaf-x&y.ts:1:14');
+    assert.match(specialSource.stdout, /export const special = 1;/);
 
     const outside = run(root, cache, 'outline', 'missing.ts');
     assert.equal(outside.status, 2);

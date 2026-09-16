@@ -10,16 +10,17 @@ const handler: SemanticHandler = async (context, invocation) => {
   const flags = invocation.input.flags;
   const prefix = flags['--prefix'] === true;
   const qualified = name.includes('.');
-  const candidates = await navto(context, name);
+  const candidates = await navto(context, qualified ? name.slice(name.lastIndexOf('.') + 1) : name);
   const rows = new Map<string, { address: string; path: string; kind: string; exported: boolean; qualifiedName: string }>();
   for (const candidate of candidates) {
-    const candidateName = qualified ? `${candidate.containerName ?? ''}.${candidate.name}` : candidate.name;
-    if (prefix ? !candidateName.startsWith(name) : candidateName !== name) continue;
+    const candidateName = candidate.name;
+    if (prefix ? !candidateName.startsWith(qualified ? name.slice(name.lastIndexOf('.') + 1) : name) : candidateName !== (qualified ? name.slice(name.lastIndexOf('.') + 1) : name)) continue;
     const kind = normalKind(candidate.kind);
     const kinds = flags['--kind'] as string[] | undefined;
     const relative = displayPath(context.root, candidate.file);
     if ((kinds && !kinds.includes(kind)) || !matchesPathFilters(relative, { in: flags['--in'] as string[] | undefined, exclude: flags['--exclude'] as string[] | undefined })) continue;
     const declaration = await context.resolver.fromFileSpan(candidate);
+    if (qualified && !(prefix ? declaration.qualifiedName.startsWith(name) : declaration.qualifiedName === name)) continue;
     const sourceLine = context.source.read(candidate.file).split('\n')[candidate.start.line - 1] ?? '';
     rows.set(declaration.address, { address: declaration.address, path: relative, kind, exported: candidate.kindModifiers.split(/[\s,]+/).includes('export') || /\bexport\b/.test(sourceLine), qualifiedName: declaration.qualifiedName });
   }
@@ -29,7 +30,7 @@ const handler: SemanticHandler = async (context, invocation) => {
   return {
     element: 'find',
     attributes: { name, count: shown.length },
-    body: shown.map((row) => `${row.address}  ${row.kind}${row.exported ? '  export' : ''}  ${escapeText(row.qualifiedName)}`).join('\n'),
+    body: shown.map((row) => `${escapeText(row.address)}  ${row.kind}${row.exported ? '  export' : ''}  ${escapeText(row.qualifiedName)}`).join('\n'),
     count: shown.length,
     receipt: `${shown.length} find row${shown.length === 1 ? '' : 's'}${limit !== undefined && sorted.length > shown.length ? `, limit ${limit}` : ''}, ${Math.round(performance.now() - started)} ms`,
   };

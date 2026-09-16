@@ -98,6 +98,15 @@ export function declarationSpans(tree: NavtreeItem, record: DeclarationRecord): 
 
 export function sourceSpan(source: string, span: Span): string { return source.slice(positionOffset(source, span.start), positionOffset(source, span.end)); }
 
+export function declarationText(source: string, span: Span, kind: string): string {
+  if (!['const', 'let', 'var'].includes(kind)) return sourceSpan(source, span);
+  const start = positionOffset(source, span.start);
+  const lineStart = source.lastIndexOf('\n', start - 1) + 1;
+  const prefix = source.slice(lineStart, start);
+  const end = positionOffset(source, span.end);
+  return /^(\s*)(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+$/.test(prefix) ? source.slice(lineStart, end + (source[end] === ';' ? 1 : 0)) : sourceSpan(source, span);
+}
+
 function normalizeKind(kind: string): string {
   const declarations: Record<string, string> = { FunctionDeclaration: 'function', ClassDeclaration: 'class', InterfaceDeclaration: 'interface', TypeAliasDeclaration: 'type', EnumDeclaration: 'enum', VariableDeclaration: 'const', MethodDeclaration: 'method', PropertyDeclaration: 'property', GetAccessor: 'getter', SetAccessor: 'setter', Constructor: 'constructor', ModuleDeclaration: 'module', ImportSpecifier: 'alias', ExportSpecifier: 'alias' };
   if (kind === 'alias') return 'alias';

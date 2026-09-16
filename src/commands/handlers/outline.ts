@@ -66,7 +66,7 @@ function containers(root: string, files: FileSymbols[], flags: Record<string, bo
   }
   return [...grouped.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, group]) => {
     const count = group.flatMap((file) => select(file.symbols, flags, 1, flags['--members'] === true)).length;
-    return { text: `${name}  (${group.length} ${group.length === 1 ? 'file' : 'files'}, ${count} symbols)` };
+    return { text: `${escapeText(name)}  (${group.length} ${group.length === 1 ? 'file' : 'files'}, ${count} symbols)` };
   });
 }
 
@@ -74,7 +74,7 @@ function symbolRow(symbol: ReadSymbol, source: string, flags: Record<string, boo
   const modifiers = symbol.exported ? '  export' : '';
   const members = symbol.children.filter((child) => (flags['--imports'] === true || child.kind !== 'alias') && keep(child, flags)).length;
   const memberCount = isContainer(symbol) ? `, ${members} members` : '';
-  return `${symbol.address}  ${symbol.kind}${modifiers}  ${escapeText(symbol.qualifiedName)}  (${lineCount(source, symbol.span)}L${memberCount})`;
+  return `${escapeText(symbol.address)}  ${symbol.kind}${modifiers}  ${escapeText(symbol.qualifiedName)}  (${lineCount(source, symbol.span)}L${memberCount})`;
 }
 
 function byPosition(a: ReadSymbol, b: ReadSymbol): number { return a.span.start.line - b.span.start.line || a.span.start.offset - b.span.start.offset; }
