@@ -4,6 +4,13 @@ import { Ts7Host } from '../ts7/api.js';
 import { ProjectRegistry } from './projects.js';
 import { TsServerSession } from './tsserver.js';
 
+/** What a store-reading leaf reports about the index it answered from (design §4.5). */
+export interface IndexState {
+  indexedAt: string;
+  state: 'current' | 'indexing' | 'stale';
+  built: import('../index/build.js').BuiltIndex;
+}
+
 /** The per-resident semantic API used by leaf handlers inside the FIFO invocation queue. */
 export interface SemanticContext {
   root: string;
@@ -13,7 +20,7 @@ export interface SemanticContext {
   resolver: DeclarationResolver;
   source: SourceReader;
   store?: import('../store/store.js').Store;
-  index?: import('../index/build.js').BuiltIndex;
+  index?: IndexState;
 }
 
 export function createSemanticContext(root: string, writeLog: (chunk: Buffer) => void): SemanticContext {

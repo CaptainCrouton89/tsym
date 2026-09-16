@@ -5,20 +5,9 @@ import path from 'node:path';
 import type { LbugValue } from '@ladybugdb/core';
 import { pathsForRoot } from '../../server/lifecycle.js';
 import { query, type QueryParameters } from '../../store/query.js';
-import type { Store, StoreRow } from '../../store/store.js';
-import type { SemanticContext } from '../../server/context.js';
+import type { StoreRow } from '../../store/store.js';
 import type { Completion, Invocation, InvocationError } from '../types.js';
 import type { SemanticHandler } from '../handlers.js';
-
-interface QueryIndex {
-  indexedAt: string;
-  state: 'current' | 'indexing' | 'stale';
-}
-
-interface QueryContext extends SemanticContext {
-  store: Store;
-  index: QueryIndex;
-}
 
 const address = /^(.*):(\d+):(\d+)$/;
 
@@ -35,12 +24,12 @@ const handler: SemanticHandler = async (context, invocation) => {
     parameters.commits = commits;
   }
 
-  const queryContext = context as QueryContext;
-  if (!queryContext.store || !queryContext.index) throw new Error('The query leaf requires the resident store and index state.');
+  const { store, index } = context;
+  if (!store || !index) throw new Error('The query leaf requires the resident store and index state.');
   const started = performance.now();
   let records: StoreRow[];
   try {
-    records = query(queryContext.store, cypher, parameters);
+    records = query(store, cypher, parameters);
   } catch (error) {
     if (error instanceof Error && error.message === 'Interrupted.') return { category: 'tool', code: 'query-timeout', message: error.message };
     return rejected('cypher', error instanceof Error ? error.message : String(error), 'a Cypher statement accepted by LadybugDB', 'Correct the query using the engine message and retry.');
@@ -62,7 +51,7 @@ const handler: SemanticHandler = async (context, invocation) => {
   return {
     data: {
       element: 'query',
-      attributes: { rows: rows.length, shown: shown.length, indexedAt: queryContext.index.indexedAt, state: queryContext.index.state, ms: elapsed },
+      attributes: { rows: rows.length, shown: shown.length, indexedAt: index.indexedAt, state: index.state, ms: elapsed },
       text: shown.join('\n'),
       children: shown.length < rows.length && resultPath !== undefined
         ? [{ element: 'truncated', attributes: { rows: rows.length, shown: shown.length, file: resultPath }, text: 'Re-run with --rows 0 for every row on stdout.' }]
