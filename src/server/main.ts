@@ -319,7 +319,7 @@ async function main(): Promise<void> {
       if (batch.git) {
         const commit = headCommit(root);
         ingestCommits(root, store!, [commit]);
-        writeMetadata(store!.path, metadataFor(root, configured, commit));
+        writeMetadata(store!.path, metadataFor(root, configured, commit, refreshed.built.receipt.durationMs));
       }
       return { indexedAt: indexedAt(root), state: 'current', built: refreshed.built };
     });

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { loadGraph, readGraph, type DeclarationRow, type LoadReceipt, type RelationshipRow, type StoreGraph } from '../store/load.js';
-import { metadataFor, writeMetadata } from '../store/meta.js';
+import { metadataFor, readMetadata, writeMetadata } from '../store/meta.js';
 import { Store } from '../store/store.js';
 import { Ts7Host } from '../ts7/api.js';
 import { ConfiguredProjects } from '../ts7/projects.js';
@@ -27,7 +27,8 @@ export function buildIndex(root: string, program: Ts7Host, projects: ConfiguredP
   const walked = walkIndex(root, program, projects);
   const enriched = addHeritage(root, program, projects, walked);
   const loaded = loadGraph(store, storeGraph(enriched));
-  writeMetadata(store.path, metadataFor(root, projects, headCommit(root)));
+  const durationMs = performance.now() - started;
+  writeMetadata(store.path, metadataFor(root, projects, headCommit(root), durationMs));
   return {
     graph: enriched.graph,
     heritage: enriched.relationships,
@@ -36,7 +37,7 @@ export function buildIndex(root: string, program: Ts7Host, projects: ConfiguredP
       internalSites: enriched.graph.internalSites,
       unresolvedOccurrences: enriched.graph.unresolvedOccurrences,
       dispatchCalls: enriched.dispatchCalls,
-      durationMs: performance.now() - started,
+      durationMs,
     },
   };
 }
@@ -44,6 +45,9 @@ export function buildIndex(root: string, program: Ts7Host, projects: ConfiguredP
 /** Rehydrates an unchanged persisted graph without re-walking the TypeScript program. */
 export function reuseIndex(store: Store): BuiltIndex {
   const persisted = readGraph(store);
+  const metadata = readMetadata(store.path);
+  if (!metadata) throw new Error('reuseIndex requires persisted store metadata; canReuse must pass first.');
+  const durationMs = metadata.indexDurationMs;
   const declarations = new Map(persisted.declarations.map((declaration) => [declaration.key, declaration as DeclarationNode]));
   const externals = new Map(persisted.externals.map((external) => [external.key, external]));
   const relationships = persisted.relationships.filter((relationship) => ['CONTAINS', 'REFERENCES', 'CALLS', 'TYPE_MENTION', 'IMPORTS', 'EXPORTS'].includes(relationship.type)).map(({ target: _target, ...relationship }) => relationship as IndexRelationship);
@@ -60,7 +64,7 @@ export function reuseIndex(store: Store): BuiltIndex {
   return {
     graph: { declarations, externals, files, relationships, internalSites: 0, unresolvedOccurrences: 0 },
     heritage,
-    receipt: { declarations: persisted.declarations.length, externals: persisted.externals.length, commits: persisted.commits?.length ?? 0, relationships: counts, internalSites: 0, unresolvedOccurrences: 0, dispatchCalls: persisted.relationships.filter((relationship) => relationship.type === 'CALLS' && relationship.dispatch === true).length, durationMs: 0 },
+    receipt: { declarations: persisted.declarations.length, externals: persisted.externals.length, commits: persisted.commits?.length ?? 0, relationships: counts, internalSites: 0, unresolvedOccurrences: 0, dispatchCalls: persisted.relationships.filter((relationship) => relationship.type === 'CALLS' && relationship.dispatch === true).length, durationMs },
   };
 }
 

@@ -33,7 +33,8 @@ export function refreshIndex(root: string, program: Ts7Host, projects: Configure
   const full = options.full === true;
   if (full) loadGraph(store, graph);
   else if (changedFiles.length > 0) replaceFiles(store, changedFiles, fileGraph(graph, changedFiles));
-  writeMetadata(store.path, metadataFor(root, projects, headCommit(root)));
+  const durationMs = performance.now() - started;
+  writeMetadata(store.path, metadataFor(root, projects, headCommit(root), durationMs));
 
   let validation: RefreshResult['validation'] = 'off';
   if (options.validate) {
@@ -42,7 +43,7 @@ export function refreshIndex(root: string, program: Ts7Host, projects: Configure
     validation = 'matched';
   }
 
-  return { built: built(candidate, graph, performance.now() - started), changedFiles, full, validation };
+  return { built: built(candidate, graph, durationMs), changedFiles, full, validation };
 }
 
 export function graphsEqual(left: HeritageGraph, right: HeritageGraph): boolean {

@@ -21,6 +21,8 @@ export interface StoreMetadata {
   configHashes: Record<string, string>;
   packageHash: string;
   lockfileHash: string;
+  /** Duration of the index operation that wrote this metadata; reported by `server status` after a reuse. */
+  indexDurationMs: number;
   files: Record<string, IndexedFileMeta>;
 }
 
@@ -49,7 +51,7 @@ export function writeMetadata(storePath: string, metadata: StoreMetadata): void 
 }
 
 /** Captures every input whose change can alter the configured-program graph. */
-export function metadataFor(root: string, projects: ConfiguredProjects, indexedCommit: string, tsVersion = bundledTsVersion()): StoreMetadata {
+export function metadataFor(root: string, projects: ConfiguredProjects, indexedCommit: string, indexDurationMs = 0, tsVersion = bundledTsVersion()): StoreMetadata {
   const configs = [...new Set(projects.records().map((project) => path.resolve(project.config)))].sort();
   const shapeConfigs = inheritedConfigs(configs);
   const files = [...new Set(projects.records().flatMap((project) => [...project.files]))].sort();
@@ -62,6 +64,7 @@ export function metadataFor(root: string, projects: ConfiguredProjects, indexedC
     configHashes: Object.fromEntries(shapeConfigs.map((file) => [relative(root, file), hashFile(file)])),
     packageHash: hashOptional(path.join(root, 'package.json')),
     lockfileHash: lockfiles.map((name) => `${name}:${hashOptional(path.join(root, name))}`).join('|'),
+    indexDurationMs,
     files: Object.fromEntries(files.map((file) => {
       const stat = statSync(file);
       return [relative(root, file), { size: stat.size, mtimeMs: stat.mtimeMs }];
@@ -79,8 +82,8 @@ export function hasSourceDrift(metadata: StoreMetadata, expected: StoreMetadata)
   return JSON.stringify(metadata.files) !== JSON.stringify(expected.files);
 }
 
-function shapeOf(metadata: StoreMetadata): Omit<StoreMetadata, 'files'> {
-  const { files: _files, ...shape } = metadata;
+function shapeOf(metadata: StoreMetadata): Omit<StoreMetadata, 'files' | 'indexDurationMs'> {
+  const { files: _files, indexDurationMs: _duration, ...shape } = metadata;
   return shape;
 }
 

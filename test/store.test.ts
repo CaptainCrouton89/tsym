@@ -237,7 +237,7 @@ test('refuses a second process before Ladybug opens the store', () => {
 test('metadata and state directories preserve every shape input', () => {
   const temp = temporaryStore();
   try {
-    const metadata = { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7.0.2', tsymBuild: 'build', indexedCommit: 'abc', configSet: ['tsconfig.json'], configHashes: { 'tsconfig.json': 'config' }, packageHash: 'package', lockfileHash: 'lock', files: { 'src/file.ts': { size: 7, mtimeMs: 12 } } };
+    const metadata = { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7.0.2', tsymBuild: 'build', indexedCommit: 'abc', configSet: ['tsconfig.json'], configHashes: { 'tsconfig.json': 'config' }, packageHash: 'package', lockfileHash: 'lock', indexDurationMs: 0, files: { 'src/file.ts': { size: 7, mtimeMs: 12 } } };
     writeMetadata(temp.path, metadata);
     assert.deepEqual(readMetadata(temp.path), metadata);
     const paths = pathsForRoot(temp.root);
