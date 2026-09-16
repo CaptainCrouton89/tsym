@@ -7,13 +7,11 @@ import { renderGraph } from '../../relations/mermaid.js';
 import { roleAt, relative, type ProtocolSpan } from '../../relations/syntax.js';
 import type { RelationRow, TraversalResult } from '../../relations/types.js';
 import type { SemanticHandler } from '../handlers.js';
-import type { Answer, ToolError } from '../types.js';
+import type { Answer } from '../types.js';
 
 const relationOrder = ['refs', 'callers', 'calls', 'impl'] as const;
 type Relation = typeof relationOrder[number];
 interface ReferenceRow { path: string; line: number; col: number; kind: string; qualifiedName: string; role: string; }
-interface PlainRow { record: DeclarationRecord; }
-
 const handler: SemanticHandler = async (context, invocation) => {
   const started = performance.now();
   const selected = selectedRelations(invocation.input.flags['--only']);
@@ -21,8 +19,7 @@ const handler: SemanticHandler = async (context, invocation) => {
   const depth = invocation.input.flags['--depth'] as number;
   const graphMode = invocation.input.flags['--graph'] === true;
   const filters = { in: strings(invocation.input.flags['--in']), exclude: strings(invocation.input.flags['--exclude']) };
-  try {
-    const seeds = await Promise.all(invocation.input.args.map((input) => context.resolver.resolve(input)));
+  const seeds = await Promise.all(invocation.input.args.map((input) => context.resolver.resolve(input)));
     if (graphMode) return graphAnswer(context, seeds, selected, depth, filters, started);
     const blocks: string[] = [];
     let answers = 0;
@@ -52,13 +49,10 @@ const handler: SemanticHandler = async (context, invocation) => {
     }
     const capped = selected.some((relation) => relation === 'refs' || relation === 'impl' || relation === 'calls' || relation === 'callers') && each > 0;
     const rerun = capped ? `; re-run symbols inspect ${invocation.input.args.join(' ')} --only ${selected[0]} --each 0 for all rows` : '';
-    return { element: 'inspect', raw: blocks.join('\n'), count: answers, receipt: `${invocation.input.args.map((input, index) => `${seeds[index]!.name}: ${receiptParts.slice(index * selected.length, (index + 1) * selected.length).join(', ')}`).join('; ')}, ${Math.round(performance.now() - started)} ms${rerun}` };
-  } catch (error) {
-    return errorAnswer(error);
-  }
+  return { element: 'inspect', raw: blocks.join('\n'), count: answers, receipt: `${invocation.input.args.map((input, index) => `${seeds[index]!.name}: ${receiptParts.slice(index * selected.length, (index + 1) * selected.length).join(', ')}`).join('; ')}, ${Math.round(performance.now() - started)} ms${rerun}` };
 };
 
-async function graphAnswer(context: Parameters<SemanticHandler>[0], seeds: DeclarationRecord[], selected: readonly Relation[], depth: number, filters: { in: string[]; exclude: string[] }, started: number): Promise<Answer | ToolError> {
+async function graphAnswer(context: Parameters<SemanticHandler>[0], seeds: DeclarationRecord[], selected: readonly Relation[], depth: number, filters: { in: string[]; exclude: string[] }, started: number): Promise<Answer> {
   const relations = await Promise.all(selected.filter((relation): relation is 'callers' | 'calls' => relation === 'callers' || relation === 'calls').map((relation) => traverse(context, seeds, relation, depth, filters)));
   const graph = mergeGraphs(relations.map((result) => result.graph));
   const count = relations.reduce((sum, result) => sum + result.rows.length, 0);
@@ -117,6 +111,4 @@ function shownRows<T>(rows: readonly T[], each: number): readonly T[] { return e
 function selectedRelations(value: boolean | number | string | string[] | undefined): readonly Relation[] { const values = Array.isArray(value) ? value : relationOrder; return relationOrder.filter((relation) => values.includes(relation)); }
 function strings(value: boolean | number | string | string[] | undefined): string[] { return Array.isArray(value) ? value : value === undefined ? [] : [String(value)]; }
 function pathName(value: string): string { const parts = value.split('/'); return parts[parts.length - 1]!; }
-function errorAnswer(error: unknown): ToolError { return { category: 'tool', code: 'inspect-failed', message: error instanceof Error ? error.message : 'Inspect could not complete.', next: 'Read the server log and retry the command.' }; }
-
 export default handler;
