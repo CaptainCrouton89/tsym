@@ -17,8 +17,8 @@ export type StoreRow = Record<string, LbugValue>;
 export class Store {
   readonly path: string;
   private readonly ownerPath: string;
-  private readonly database: Database;
-  private readonly connection: Connection;
+  private database: Database | undefined;
+  private connection: Connection | undefined;
   private closed = false;
 
   constructor(storePath: string) {
@@ -36,6 +36,8 @@ export class Store {
       if (tables.size === 0) this.transaction(() => { for (const statement of SCHEMA_STATEMENTS) this.execute(statement); });
       else if (!expected.every((name) => tables.has(name))) throw new Error(`Store schema is incomplete at ${this.path}.`);
     } catch (error) {
+      try { this.connection?.closeSync(); } catch {}
+      try { this.database?.closeSync(); } catch {}
       releaseOwnership(this.path, this.ownerPath);
       throw error;
     }
@@ -43,9 +45,11 @@ export class Store {
 
   execute(statement: string, parameters?: Record<string, LbugValue>): StoreRow[] {
     this.assertOpen();
+    const connection = this.connection;
+    if (connection === undefined) throw new Error('Store did not finish opening.');
     const result = parameters === undefined
-      ? this.connection.querySync(statement)
-      : this.connection.executeSync(this.connection.prepareSync(statement), parameters);
+      ? connection.querySync(statement)
+      : connection.executeSync(connection.prepareSync(statement), parameters);
     return collect(result);
   }
 
@@ -68,8 +72,8 @@ export class Store {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    try { this.connection.closeSync(); } finally {
-      try { this.database.closeSync(); } finally { releaseOwnership(this.path, this.ownerPath); }
+    try { this.connection?.closeSync(); } finally {
+      try { this.database?.closeSync(); } finally { releaseOwnership(this.path, this.ownerPath); }
     }
   }
 
