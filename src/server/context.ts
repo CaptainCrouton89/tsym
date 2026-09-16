@@ -29,5 +29,7 @@ export function createSemanticContext(root: string, writeLog: (chunk: Buffer) =>
   const program = new Ts7Host(root);
   const projects = new ProjectRegistry(root, session, program);
   const source = new SourceReader(projects);
-  return { root, session, program, projects, resolver: new DeclarationResolver(root, session, projects, source), source };
+  let context!: SemanticContext;
+  context = { root, session, program, projects, resolver: new DeclarationResolver(root, source, () => context.store), source };
+  return context;
 }

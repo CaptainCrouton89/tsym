@@ -1,17 +1,15 @@
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { DeclarationError, type DeclarationRecord } from '../core/declarations.js';
+import { DeclarationError } from '../core/declarations.js';
 import { matchesPathFilters } from '../core/receipt.js';
 import { openWorkspace } from '../core/workspace.js';
 import type { SemanticContext } from '../server/context.js';
 
 export interface Position { line: number; offset: number; }
 export interface Span { start: Position; end: Position; }
-export interface NavtreeItem { text: string; kind: string; kindModifiers: string; spans: Span[]; nameSpan?: Span; childItems?: NavtreeItem[]; }
-export interface NavtoItem { name: string; kind: string; kindModifiers: string; file: string; start: Position; end: Position; containerName?: string; }
-export interface ReadSymbol { address: string; path: string; name: string; qualifiedName: string; kind: string; exported: boolean; span: Span; nameSpan?: Span; children: ReadSymbol[]; }
+export interface ReadSymbol { address: string; path: string; name: string; qualifiedName: string; kind: string; exported: boolean; span: Span; children: ReadSymbol[]; }
 
-const containers = new Set(['class', 'interface', 'enum', 'module']);
+const containers = new Set(['class', 'interface', 'enum', 'namespace']);
 const extensions = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
 
 export function displayPath(root: string, file: string): string { return path.relative(root, file).split(path.sep).join('/'); }
@@ -29,32 +27,6 @@ export function lineCount(source: string, span: Span): number {
   return source.slice(start, end).split('\n').length - (end > start && source[end - 1] === '\n' ? 1 : 0);
 }
 
-export async function navtree(context: SemanticContext, file: string): Promise<NavtreeItem> { return await context.session.navtree(file) as NavtreeItem; }
-export async function navto(context: SemanticContext, name: string): Promise<NavtoItem[]> { const body = await context.session.navto(name); return Array.isArray(body) ? body as NavtoItem[] : []; }
-
-export function readSymbols(root: string, file: string, tree: NavtreeItem, source: string): ReadSymbol[] {
-  const visit = (item: NavtreeItem, container?: string): ReadSymbol | null => {
-    const span = item.spans[0];
-    if (!span) return null;
-    const kind = normalizeKind(item.kind);
-    const name = item.text;
-    const nameSpan = item.nameSpan;
-    const address = nameSpan ? `${displayPath(root, file)}:${nameSpan.start.line}:${nameSpan.start.offset}` : `${displayPath(root, file)}:${span.start.line}:${span.start.offset}`;
-    const owner = container ? `${container}.${name}` : name;
-    const children = (item.childItems ?? []).map((child) => visit(child, owner)).filter((child): child is ReadSymbol => child !== null);
-    return { address, path: displayPath(root, file), name, qualifiedName: container ? `${container}.${name}` : name, kind, exported: item.kindModifiers.split(/[\s,]+/).includes('export'), span, nameSpan, children };
-  };
-  return (tree.childItems ?? []).map((item) => visit(item)).filter((item): item is ReadSymbol => item !== null);
-}
-
-export function normalKind(kind: string): string { return normalizeKind(kind); }
-export function symbolAt(root: string, file: string, tree: NavtreeItem, source: string, address: string): ReadSymbol | null {
-  const visit = (items: ReadSymbol[]): ReadSymbol | null => {
-    for (const item of items) { if (item.address === address) return item; const child = visit(item.children); if (child) return child; }
-    return null;
-  };
-  return visit(readSymbols(root, file, tree, source));
-}
 export function isContainer(symbol: ReadSymbol): boolean { return containers.has(symbol.kind); }
 export function keep(symbol: ReadSymbol, flags: Record<string, boolean | number | string | string[]>): boolean {
   const kinds = flags['--kind'] as string[] | undefined;
@@ -68,7 +40,7 @@ export async function scopeFiles(context: SemanticContext, cwd: string, inputs: 
   const selected = new Set<string>();
   for (const input of inputs.length === 0 ? [context.root] : inputs) {
     const absolute = path.resolve(cwd, input);
-    const rel = displayPath(context.root, absolute);
+    const relative = displayPath(context.root, absolute);
     const glob = /[*?[{]/.test(input);
     if (existsSync(absolute)) {
       const stat = statSync(absolute);
@@ -78,10 +50,10 @@ export async function scopeFiles(context: SemanticContext, cwd: string, inputs: 
         if (!membership) throw new DeclarationError('not-in-program', `${input} exists but is not part of a TypeScript project under ${context.root}`);
         selected.add(displayPath(context.root, absolute));
       } else if (stat.isDirectory()) {
-        for (const file of listed) if (rel === '' || file === rel || file.startsWith(`${rel.replace(/\/$/, '')}/`)) selected.add(file);
+        for (const file of listed) if (relative === '' || file === relative || file.startsWith(`${relative.replace(/\/$/, '')}/`)) selected.add(file);
       }
     } else if (glob) {
-      for (const file of listed) if (workspace.files(rel).includes(file)) selected.add(file);
+      for (const file of listed) if (workspace.files(relative).includes(file)) selected.add(file);
     } else throw new DeclarationError('no-such-path', `${input} does not exist`);
   }
   let notInProgram = 0;
@@ -92,20 +64,6 @@ export async function scopeFiles(context: SemanticContext, cwd: string, inputs: 
     else notInProgram++;
   }
   return { files, notInProgram };
-}
-
-export function declarationSpans(tree: NavtreeItem, record: DeclarationRecord): Span[] {
-  if (record.location.line === 0) return [];
-  const found: Span[] = [];
-  const visit = (item: NavtreeItem) => {
-    if (item.text === record.name && item.spans.some((span) =>
-      (record.location.line > span.start.line || record.location.line === span.start.line && record.location.col >= span.start.offset) &&
-      (record.location.line < span.end.line || record.location.line === span.end.line && record.location.col < span.end.offset))) found.push(...item.spans);
-    for (const child of item.childItems ?? []) visit(child);
-  };
-  visit(tree);
-  if (!found.length) throw new DeclarationError('unresolvable-symbol', `No declaration span contains ${record.address}`);
-  return found.sort((a, b) => a.start.line - b.start.line || a.start.offset - b.start.offset);
 }
 
 export function sourceSpan(source: string, span: Span): string { return source.slice(positionOffset(source, span.start), positionOffset(source, span.end)); }
@@ -120,9 +78,4 @@ export function declarationText(source: string, span: Span, kind: string): strin
   return /^(\s*)(?:export\s+)?(?:declare\s+)?(?:const|let|var)\b/.test(prefix) ? source.slice(lineStart, statementEnd < 0 ? end : statementEnd + 1) : sourceSpan(source, span);
 }
 
-function normalizeKind(kind: string): string {
-  const declarations: Record<string, string> = { FunctionDeclaration: 'function', ClassDeclaration: 'class', InterfaceDeclaration: 'interface', TypeAliasDeclaration: 'type', EnumDeclaration: 'enum', VariableDeclaration: 'const', MethodDeclaration: 'method', PropertyDeclaration: 'property', GetAccessor: 'getter', SetAccessor: 'setter', Constructor: 'constructor', ModuleDeclaration: 'module', ImportSpecifier: 'alias', ExportSpecifier: 'alias' };
-  if (kind === 'alias') return 'alias';
-  if (kind === 'enum member') return 'property';
-  return Object.prototype.hasOwnProperty.call(declarations, kind) ? declarations[kind]! : kind;
-}
+export function normalKind(kind: string): string { return kind === 'module' ? 'namespace' : kind; }
