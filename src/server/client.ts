@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { closeSync, existsSync, openSync } from 'node:fs';
 import { connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import type { Completion, Invocation, ToolError } from '../commands/types.js';
-import { discoverRoot, pathsForRoot, type ServerPaths } from './lifecycle.js';
+import { discoverRoot, ensureStateDirectory, pathsForRoot, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, request, type PhaseFrame, type ResponseFrame, type WireFrame, writeFrame } from './wire.js';
 
 type DeadlinePhase = 'queued' | 'project-load' | 'running';
@@ -36,7 +36,7 @@ export async function serverStop(rootOverride?: string): Promise<Completion> {
 export async function serverReload(rootOverride?: string): Promise<Completion> {
   const root = discoverRoot(rootOverride);
   await serverStop(root);
-  const completion = await ensure(root);
+  const completion = await ensure(root, true, true);
   return withStartup(completion, completion.startupStartedAt);
 }
 
@@ -74,13 +74,16 @@ async function send(root: string, operation: 'invoke' | 'status' | 'stop', invoc
   }
 }
 
-async function ensure(root: string, force = false): Promise<Completion & { startupStartedAt?: number }> {
+async function ensure(root: string, force = false, rebuild = false): Promise<Completion & { startupStartedAt?: number }> {
   const paths = pathsForRoot(root);
   if (!force && existsSync(paths.port)) {
     try { return await exchange(paths, request(root, 'status')); } catch { /* a lock holder will clean stale endpoint */ }
   }
   const startedAt = performance.now();
-  spawn(process.execPath, [fileURLToPath(new URL('../../dist/server/main.js', import.meta.url)), '--root', root], { detached: true, stdio: 'ignore' }).unref();
+  ensureStateDirectory(paths);
+  const log = openSync(paths.log, 'a', 0o600);
+  try { spawn(process.execPath, [fileURLToPath(new URL('../../dist/server/main.js', import.meta.url)), '--root', root, ...(rebuild ? ['--rebuild'] : [])], { detached: true, stdio: ['ignore', log, log] }).unref(); }
+  finally { closeSync(log); }
   const deadline = startedAt + 30_000;
   while (performance.now() < deadline) {
     if (existsSync(paths.port)) {
@@ -148,7 +151,7 @@ function withStartup(completion: Completion & { startupStartedAt?: number }, sta
 
 function deadlineFailure(paths: ServerPaths, deadline: DeadlineExpired): ToolError {
   if (deadline.phase === 'project-load') return { category: 'tool', code: 'project-load-timeout', message: 'TypeScript did not load the workspace project before its deadline.', logPath: paths.log, next: 'Repair the project, then retry.' };
-  if (deadline.phase === 'running') return { category: 'tool', code: 'request-timeout', message: 'The semantic request exceeded its deadline.', logPath: paths.log, received: deadline.command ?? 'no tsserver command was dispatched', next: 'Retry after repairing the workspace or narrowing the command.' };
+  if (deadline.phase === 'running') return { category: 'tool', code: 'request-timeout', message: 'The semantic request exceeded its deadline.', logPath: paths.log, received: deadline.command ?? 'no semantic operation started', next: 'Retry after repairing the workspace or narrowing the command.' };
   return { category: 'tool', code: 'server-unavailable', message: 'The resident did not begin this request before its admission deadline.', logPath: paths.log, next: 'Retry after the current request completes.' };
 }
 

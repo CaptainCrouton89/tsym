@@ -69,6 +69,7 @@ export interface InvocationError {
 export interface ToolError {
   category: 'tool';
   code: string;
+  attributes?: Record<string, string>;
   message: string;
   logPath?: string;
   received?: string;

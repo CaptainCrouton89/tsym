@@ -1,8 +1,21 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { API, type Project, type Snapshot } from 'typescript/unstable/sync';
 import { resolveFileName } from 'typescript/unstable/proto';
 import type { UpdateSnapshotParams } from 'typescript/unstable/proto';
+
+const require = createRequire(import.meta.url);
+
+export class TypeScriptBinaryError extends Error {
+  readonly code = 'no-typescript-binary';
+  readonly platform: string;
+
+  constructor(platform = `${process.platform}-${process.arch}`) {
+    super(`TypeScript has no prebuilt binary for ${platform}, and tsym does not compile it.`);
+    this.platform = platform;
+  }
+}
 
 export class Ts7ServerDiedError extends Error {
   constructor(cause: unknown) {
@@ -19,6 +32,8 @@ export class Ts7Host {
   private changed = new Set<string>();
 
   constructor(readonly root: string) { this.api = this.createApi(); }
+
+  get pid(): number | undefined { return (this.api as unknown as { client: { channel: { child: { pid?: number } } } }).client.channel.child.pid; }
 
   /** Opens newly discovered configs and closes vanished ones; project opens are ref-counted, so each open needs its close. */
   load(configs: readonly string[]): readonly Project[] {
@@ -86,6 +101,7 @@ export class Ts7Host {
   }
 
   private createApi(): API {
+    assertTypeScriptBinary();
     return new API({ cwd: this.root, fs: { readFile: (file) => {
       if (!this.changed.has(path.resolve(file))) return undefined;
       try { return readFileSync(file, 'utf8'); }
@@ -106,6 +122,21 @@ export class Ts7Host {
     try { this.snapshot.dispose(); }
     catch (error) { if (!isBadFileDescriptor(error)) throw error; }
     this.snapshot = undefined;
+  }
+}
+
+export function bundledTypeScriptVersion(): string {
+  return require('typescript/package.json').version as string;
+}
+
+function assertTypeScriptBinary(): void {
+  const packageName = `@typescript/typescript-${process.platform}-${process.arch}`;
+  try {
+    const packageJson = require.resolve(`${packageName}/package.json`);
+    const binary = path.join(path.dirname(packageJson), 'lib', process.platform === 'win32' ? 'tsc.exe' : 'tsc');
+    if (!existsSync(binary)) throw new Error('TypeScript native binary is absent.');
+  } catch {
+    throw new TypeScriptBinaryError();
   }
 }
 

@@ -2,7 +2,7 @@
 
 Symbol-level reading of a TypeScript codebase, from the compiler's own resolution.
 
-`tsym` answers questions about TypeScript symbols — where something is declared, what its type resolves to, who calls it, what it calls, what implements it — by asking a resident `tsserver` rather than by matching text. The answers come from the same program the compiler builds, so they can be acted on without re-reading files to confirm.
+`tsym` answers questions about TypeScript symbols — where something is declared, what its type resolves to, who calls it, what it calls, what implements it — through a resident bundled TypeScript 7 process and its persisted index rather than by matching text. The answers come from the same program the compiler builds, so they can be acted on without re-reading files to confirm.
 
 Output is one named XML block on stdout per call, with a one-line receipt on stderr. It is written for agents first: `-h` on any command prints a machine-readable description of its arguments, flags, and output contract.
 
@@ -38,9 +38,9 @@ tsym server status
 
 ## The resident server
 
-A semantic command starts one `tsserver` per workspace root and leaves it running, so the second and later commands skip project load. It exits on its own after an idle period. `tsym server status` reports the process, its memory, and which TypeScript installation it loaded; `tsym server reload` picks up a branch switch or a dependency install; `tsym server stop` ends it.
+A semantic command starts one resident process per workspace root and leaves it running, so the second and later commands reuse the loaded program and persisted index. It exits on its own after an idle period. `tsym server status` reports the process, memory, bundled TypeScript 7 version, store path, indexed commit, selected-scope counts, files outside configured projects, index state, and last index duration; `tsym server reload` forces a full index rebuild after a branch switch or dependency install; `tsym server stop` ends it.
 
-The workspace's own `node_modules/typescript` is used when present. Otherwise the TypeScript bundled with this package is used, so `tsym` works in a checkout with no dependencies installed.
+The bundled TypeScript 7 process is always used, so `tsym` works in a checkout with no dependencies installed.
 
 ## Using it from crtr
 

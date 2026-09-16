@@ -44,7 +44,7 @@ function renderInvocationError(error: InvocationError): string {
 
 function renderToolError(error: ToolError): string {
   const lines = [error.message, error.received ? `received: ${error.received}` : null, error.expected ? `expected: ${error.expected}` : null, error.logPath ? `log: ${error.logPath}` : null, error.next ? `Next: ${error.next}` : null].filter((line): line is string => line !== null);
-  return xml('error', { code: error.code }, lines.join('\n'));
+  return xml('error', { code: error.code, ...error.attributes }, lines.join('\n'));
 }
 
 function receipt(completion: Completion): string {

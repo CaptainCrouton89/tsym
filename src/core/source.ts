@@ -1,15 +1,15 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import * as ts from '../ts7/ast.js';
-import { registryForTsserverPath, type ProjectRegistry } from '../server/projects.js';
+import type { ProjectRegistry } from '../server/projects.js';
 
 export interface SourceSpan { start: number; end: number; }
 export interface SyntaxDeclaration { name: string; kind: string; nameSpan: SourceSpan; span: SourceSpan; containerName?: string; }
 
 /** Syntax-only reader backed by the resident TypeScript 7 snapshot. */
 export class SourceReader {
-  private readonly projects: ProjectRegistry;
-  constructor(projects: ProjectRegistry | string) { this.projects = typeof projects === 'string' ? registryForTsserverPath(projects) : projects; }
+  private readonly projects: Pick<ProjectRegistry, 'refreshFile' | 'sourceFile' | 'anySourceFile'>;
+  constructor(projects: Pick<ProjectRegistry, 'refreshFile' | 'sourceFile' | 'anySourceFile'>) { this.projects = projects; }
   read(file: string): string { return readFileSync(file, 'utf8'); }
   declarationAt(file: string, line: number, offset: number): SyntaxDeclaration | null {
     const source = this.parse(file);

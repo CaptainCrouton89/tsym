@@ -1,10 +1,23 @@
-import { Connection, Database, type LbugValue, type QueryResult } from '@ladybugdb/core';
-import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import type { Connection, Database, LbugValue, QueryResult } from '@ladybugdb/core';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { NODE_TABLES, RELATION_TABLES, SCHEMA_STATEMENTS } from './schema.js';
 
 const ownedStores = new Set<string>();
 const DEFAULT_BOUNDED_QUERY_TIMEOUT_MS = 30_000;
+const ENGINE_PLATFORMS = ['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-arm64', 'win32-x64'];
+const require = createRequire(import.meta.url);
+
+export class EngineBinaryError extends Error {
+  readonly code = 'no-engine-binary';
+  readonly platform: string;
+
+  constructor(platform = `${process.platform}-${process.arch}`) {
+    super(`LadybugDB has no prebuilt binary for ${platform}, and tsym does not compile it.\nPrebuilt platforms: ${ENGINE_PLATFORMS.join(', ')}.`);
+    this.platform = platform;
+  }
+}
 
 export interface StoreOptions {
   boundedQueryTimeoutMs?: number;
@@ -42,6 +55,7 @@ export class Store {
     mkdirSync(this.path, { recursive: true, mode: 0o700 });
     acquireOwnership(this.path, this.ownerPath);
     try {
+      const { Database, Connection } = loadEngine();
       this.database = new Database(path.join(this.path, 'graph.lbug'));
       this.database.initSync();
       this.connection = new Connection(this.database);
@@ -108,7 +122,7 @@ export class Store {
     if (this.boundedConnection !== undefined) return this.boundedConnection;
     const database = this.database;
     if (database === undefined) throw new Error('Store did not finish opening.');
-    const connection = new Connection(database);
+    const connection = new (loadEngine().Connection)(database);
     connection.initSync();
     connection.setQueryTimeout(this.boundedQueryTimeoutMs);
     this.boundedConnection = connection;
@@ -118,6 +132,14 @@ export class Store {
   private assertOpen(): void {
     if (this.closed) throw new Error('Store is closed.');
   }
+}
+
+function loadEngine(): { Database: new (file: string) => Database; Connection: new (database: Database) => Connection } {
+  let entry: string;
+  try { entry = require.resolve('@ladybugdb/core'); }
+  catch { throw new EngineBinaryError(); }
+  if (!existsSync(path.join(path.dirname(entry), 'lbugjs.node'))) throw new EngineBinaryError();
+  return require('@ladybugdb/core') as { Database: new (file: string) => Database; Connection: new (database: Database) => Connection };
 }
 
 function tableName(statement: string): string {

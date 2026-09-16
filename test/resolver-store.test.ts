@@ -42,7 +42,7 @@ function invocation(root: string, name: 'outline' | 'find' | 'show', args: strin
   return { root, cwd: root, json: false, path: [name], declaration: { name, description: '', argument: { name: name === 'show' ? 'symbol' : name === 'find' ? 'name' : 'path', repeat: '1' as const, description: '' } }, input: { args, flags: { '--depth': 1, ...flags }, explicit: new Set<string>() } } as never;
 }
 
-test('the fixture index resolves declarations, usage addresses, and modules without tsserver reads', async () => {
+test('the fixture index resolves declarations, usage addresses, and modules from the store', async () => {
   const { context, cleanup } = fixture((root) => writeFileSync(path.join(root, 'src/alias.ts'), "import { greet as \\u0076eryLongAlias } from './greet.js';\n\\u0076eryLongAlias('x');\n"));
   try {
     assert.equal((await context.resolver.resolve('greet')).address, 'src/greet.ts:2:17');

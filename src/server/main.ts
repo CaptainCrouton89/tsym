@@ -1,18 +1,18 @@
 import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { createServer, type Socket } from 'node:net';
-import { appendFileSync, chmodSync, openSync } from 'node:fs';
+import { appendFileSync, chmodSync, openSync, readdirSync } from 'node:fs';
 import { discoverRoot, ensureStateDirectory, idleSeconds, pathsForRoot, publishState, removeEndpoint, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, WIRE_VERSION, type WireFrame, type WireRequest, writeFrame } from './wire.js';
 import { createSemanticContext } from './context.js';
-import { Ts7ServerDiedError } from '../ts7/api.js';
+import { bundledTypeScriptVersion, Ts7ServerDiedError, TypeScriptBinaryError } from '../ts7/api.js';
 import { buildIndex, reuseIndex } from '../index/build.js';
 import { ingestCommits } from '../index/commits.js';
 import { refreshIndex } from '../index/refresh.js';
 import { IndexStateController } from '../index/state.js';
 import { watchIndex, type IndexWatcher, type WatchBatch } from '../index/watch.js';
 import { canReuse, hasSourceDrift, metadataFor, readMetadata, writeMetadata } from '../store/meta.js';
-import { Store } from '../store/store.js';
+import { EngineBinaryError, Store } from '../store/store.js';
 import { executeSemantic } from '../commands/handlers.js';
 import { findNode } from '../commands/tree.js';
 import type { Completion, ToolError } from '../commands/types.js';
@@ -44,8 +44,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const semantic = createSemanticContext(root, (chunk) => appendFileSync(paths.log, chunk));
-  const { session, program, projects } = semantic;
+  const forceRebuild = process.argv.includes('--rebuild');
+  let semantic: ReturnType<typeof createSemanticContext> | undefined;
   let store: Store | undefined;
   let index: IndexStateController | undefined;
   let watcher: IndexWatcher | undefined;
@@ -67,7 +67,7 @@ async function main(): Promise<void> {
   const invokeSockets = new Map<Socket, string>();
   const stopRequests: { requestId: string; socket: Socket }[] = [];
   const closeProgram = () => {
-    try { program.close(); }
+    try { semantic?.program.close(); }
     catch (error) { append(paths, `TypeScript 7 shutdown failure: ${safe(error)}`); }
   };
 
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
     sockets.add(socket);
     const reader = new NdjsonReader();
     socket.on('data', (chunk) => {
-      for (const value of reader.push(chunk)) receive(value, socket);
+      for (const value of reader.push(chunk)) void receive(value, socket);
     });
     socket.on('close', () => {
       sockets.delete(socket);
@@ -141,7 +141,6 @@ async function main(): Promise<void> {
   };
   const finishRetirement = async (preserve: ReadonlySet<Socket>) => {
     watcher?.close();
-    await session.stopAndWait();
     closeProgram();
     store?.close();
     removeEndpoint(paths);
@@ -167,7 +166,6 @@ async function main(): Promise<void> {
   const finishStop = async () => {
     if (idleTimer) clearTimeout(idleTimer);
     watcher?.close();
-    await session.stopAndWait();
     closeProgram();
     store?.close();
     removeEndpoint(paths);
@@ -193,7 +191,7 @@ async function main(): Promise<void> {
   };
   const requestTimeout = () => {
     if (retired || !active) return;
-    const detail = currentCommand ?? 'no tsserver command was dispatched';
+    const detail = currentCommand ?? 'no semantic operation started';
     respond(active.socket, active.request.requestId, { ...toolError('request-timeout', 'The semantic request exceeded its deadline.', 'Retry after repairing the workspace or narrowing the command.'), received: detail });
     finishSocket(active.socket);
     retire(new Set([active.socket]));
@@ -218,6 +216,8 @@ async function main(): Promise<void> {
     try {
       await Promise.race([
         (async () => {
+          semantic ??= createSemanticContext(root);
+          const { program, projects } = semantic;
           await projects.bootstrap();
           store = new Store(paths.store);
           if (active) sendPhase(active.socket, active.request.requestId, 'index-build-start', remaining(loadDeadlineAt));
@@ -229,7 +229,7 @@ async function main(): Promise<void> {
           const expected = metadataFor(root, configured, headCommit(root));
           const metadata = readMetadata(store.path);
           let built: ReturnType<typeof buildIndex>;
-          if (canReuse(metadata, expected)) {
+          if (!forceRebuild && canReuse(metadata, expected)) {
             const reused = reuseIndex(store);
             built = hasSourceDrift(metadata!, expected)
               ? refreshIndex(root, program, configured, store, reused, { fileChanges: { invalidateAll: true } }).built
@@ -237,8 +237,8 @@ async function main(): Promise<void> {
           } else {
             built = buildIndex(root, program, configured, store);
           }
-          index = new IndexStateController({ indexedAt: indexedAt(root), state: 'current', built }, (snapshot) => { semantic.index = snapshot; });
-          semantic.store = store;
+          index = new IndexStateController({ indexedAt: indexedAt(root), state: 'current', built }, (snapshot) => { semantic!.index = snapshot; });
+          semantic!.store = store;
           if (active) sendPhase(active.socket, active.request.requestId, 'index-build-end', remaining(loadDeadlineAt));
         })(),
         new Promise<never>((_, reject) => { deadlineTimer = setTimeout(() => { timedOut = true; reject(new DeadlineExceeded('project-load')); }, 60_000); deadlineTimer.unref(); }),
@@ -274,9 +274,10 @@ async function main(): Promise<void> {
       armActiveDeadline();
       const requestInvocation = queued.request.invocation;
       if (!requestInvocation) throw new Error('invoke request omitted its invocation');
+      currentCommand = requestInvocation.path.join(' ');
       const declaration = findNode(requestInvocation.path).node;
       if (readsIndex(declaration.handler)) await index?.wait();
-      const completion = await executeSemantic(semantic, { root, cwd: requestInvocation.cwd, json: false, path: requestInvocation.path, declaration, input: { args: requestInvocation.args, flags: requestInvocation.flags, explicit: new Set(requestInvocation.explicit) } });
+      const completion = await executeSemantic(semantic!, { root, cwd: requestInvocation.cwd, json: false, path: requestInvocation.path, declaration, input: { args: requestInvocation.args, flags: requestInvocation.flags, explicit: new Set(requestInvocation.explicit) } });
       if ('category' in completion && completion.category === 'tool' && !completion.logPath) completion.logPath = paths.log;
       if (!retired) respond(queued.socket, queued.request.requestId, completion);
     } catch (error) {
@@ -286,6 +287,10 @@ async function main(): Promise<void> {
       }
       if (error instanceof Ts7ServerDiedError) {
         if (!retired) respond(queued.socket, queued.request.requestId, toolError('server-died', 'The bundled TypeScript 7 process stopped responding after one recovery attempt.', 'Retry to start a fresh resident.'));
+        return;
+      }
+      if (error instanceof EngineBinaryError || error instanceof TypeScriptBinaryError) {
+        if (!retired) respond(queued.socket, queued.request.requestId, { category: 'tool', code: error.code, attributes: { platform: error.platform }, message: error.message });
         return;
       }
       if (!retired) respond(queued.socket, queued.request.requestId, toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.'));
@@ -304,8 +309,9 @@ async function main(): Promise<void> {
   const refresh = async (batch: WatchBatch): Promise<void> => {
     if (!store || !index) throw new Error('The index refresh ran before startup completed.');
     await index.rebuild(async () => {
-      const configured = projects.configured();
-      const refreshed = refreshIndex(root, program, configured, store!, index!.current().built, {
+      if (!semantic) throw new Error('The index refresh ran before TypeScript initialized.');
+      const configured = semantic.projects.configured();
+      const refreshed = refreshIndex(root, semantic.program, configured, store!, index!.current().built, {
         fileChanges: batch.fileChanges,
         full: batch.full,
         validate: process.env.TSYM_VALIDATE_INDEX === '1',
@@ -320,18 +326,7 @@ async function main(): Promise<void> {
     if (batch.full) watcher?.refresh();
   };
 
-  session.setCommandHandler((command) => {
-    currentCommand = command;
-    if (!active) return;
-    const deadlineAt = loading ? loadDeadlineAt : activeDeadlineAt;
-    sendPhase(active.socket, active.request.requestId, 'command-start', remaining(deadlineAt), command);
-  });
-  session.setDeathHandler((error) => {
-    append(paths, `tsserver death: ${safe(error)}`);
-    retire();
-  });
-
-  const receive = (value: unknown, socket: Socket) => {
+  const receive = async (value: unknown, socket: Socket): Promise<void> => {
     const request = value as Partial<WireRequest>;
     if (request.version !== WIRE_VERSION || request.root !== root || typeof request.requestId !== 'string' || !request.operation) {
       respond(socket, typeof request.requestId === 'string' ? request.requestId : '', toolError('server-unavailable', 'The resident received an invalid wire request.', 'Retry with the installed tsym CLI.'));
@@ -343,16 +338,28 @@ async function main(): Promise<void> {
       finishSocket(socket);
       return;
     }
+    if (request.operation === 'status' && forceRebuild && !bootstrapped) {
+      try { await loadProjects(); }
+      catch (error) {
+        if (error instanceof EngineBinaryError || error instanceof TypeScriptBinaryError) respond(socket, request.requestId, { category: 'tool', code: error.code, attributes: { platform: error.platform }, message: error.message });
+        else respond(socket, request.requestId, toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.'));
+        finishSocket(socket);
+        return;
+      }
+    }
     if (request.operation === 'status') {
       let memory: number;
-      try { memory = residentMemory(session.pid); }
+      try { memory = residentMemory(semantic?.program.pid); }
       catch (error) {
         respond(socket, request.requestId, toolError('server-unavailable', 'The resident could not measure its process memory.', error instanceof Error ? error.message : 'Read the server log.'));
         finishSocket(socket);
         return;
       }
       const state = stopping ? 'stopping' : 'ready';
-      respond(socket, request.requestId, { data: { element: 'server', attributes: { root, state, pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s`, uptime: `${Math.floor(performance.now() - bootedAtMonotonic)}ms`, memory, tsserver: session.location.path, typescript: session.location.version } }, count: 1 });
+      const snapshot = index?.current();
+      const receipt = snapshot?.built.receipt;
+      const indexedCommit = readMetadata(paths.store)?.indexedCommit;
+      respond(socket, request.requestId, { data: { element: 'server', attributes: { root, state, pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s`, uptime: `${Math.floor(performance.now() - bootedAtMonotonic)}ms`, memory, typescript: semantic ? bundledTypeScriptVersion() : undefined, store: paths.store, indexedCommit, declarations: receipt?.declarations, edges: receipt ? Object.values(receipt.relationships).reduce((total, count) => total + count, 0) : undefined, notInProgram: semantic ? unconfiguredFileCount(root, semantic.projects.records()) : undefined, index: snapshot?.state, indexDuration: receipt ? `${Math.round(receipt.durationMs)}ms` : undefined } }, count: 1 });
       return;
     }
     if (request.operation === 'stop') {
@@ -419,11 +426,27 @@ function headCommit(root: string): string {
   catch { return 'unknown'; }
 }
 
-function residentMemory(tsserverPid: number | undefined): number {
-  if (tsserverPid === undefined) throw new Error('tsserver is not running');
-  const rss = execFileSync('ps', ['-o', 'rss=', '-p', `${process.pid},${tsserverPid}`], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean).map(Number);
-  if (rss.length !== 2 || rss.some((value) => !Number.isFinite(value))) throw new Error('ps did not report both resident processes');
+function residentMemory(tsgoPid: number | undefined): number {
+  const pids = tsgoPid === undefined ? [process.pid] : [process.pid, tsgoPid];
+  const rss = execFileSync('ps', ['-o', 'rss=', '-p', pids.join(',')], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean).map(Number);
+  if (rss.length !== pids.length || rss.some((value) => !Number.isFinite(value))) throw new Error('ps did not report every resident process');
   return rss.reduce((total, value) => total + value, 0) * 1024;
+}
+
+function unconfiguredFileCount(root: string, records: readonly { files: ReadonlySet<string> }[]): number {
+  const configured = new Set(records.flatMap((record) => [...record.files]));
+  const extensions = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
+  const skipped = new Set(['node_modules', '.git', 'dist', 'build', 'coverage']);
+  let count = 0;
+  const visit = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const file = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) { if (!skipped.has(entry.name)) visit(file); }
+      else if (entry.isFile() && extensions.has(file.slice(file.lastIndexOf('.'))) && !configured.has(file)) count++;
+    }
+  };
+  visit(root);
+  return count;
 }
 
 void main();
