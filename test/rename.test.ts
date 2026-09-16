@@ -39,7 +39,7 @@ test('rename previews shorthand and string-literal edits without writing, then a
     const preview = run(fixture.root, fixture.cache, 'rename', 'renameShorthandValue', 'renamedShorthandValue');
     assert.equal(preview.status, 0, preview.stderr);
     assert.match(preview.stdout, /applied="false"/);
-    assert.match(preview.stdout, /renameShorthandValue → renamedShorthandValue/);
+    assert.match(preview.stdout, /renameShorthandValue → renameShorthandValue: renamedShorthandValue/);
     assert.deepEqual(readFileSync(shorthand), before.get(shorthand));
     assert.deepEqual(readFileSync(stringLiteral), before.get(stringLiteral));
 
@@ -51,8 +51,13 @@ test('rename previews shorthand and string-literal edits without writing, then a
     const applied = run(fixture.root, fixture.cache, 'rename', 'renameShorthandValue', 'renamedShorthandValue', '--apply');
     assert.equal(applied.status, 0, applied.stderr);
     assert.match(applied.stdout, /applied="true"/);
-    assert.match(readFileSync(shorthand, 'utf8'), /renamedShorthandValue/);
+    assert.match(readFileSync(shorthand, 'utf8'), /renameShorthandValue: renamedShorthandValue/);
+    assert.match(readFileSync(shorthand, 'utf8'), /renameEmojiPrefix = '😀'/);
     assert.deepEqual(readFileSync(stringLiteral), before.get(stringLiteral));
+
+    const invalid = run(fixture.root, fixture.cache, 'rename', 'renameShorthandValue', 'bad-name');
+    assert.equal(invalid.status, 2, invalid.stderr);
+    assert.match(invalid.stderr, /identifier/);
   } finally {
     fixture.close();
   }
@@ -84,6 +89,18 @@ test('rename apply removes staged files after preparation and commit failures an
     assert.equal('category' in commit && commit.code, 'rename-write-failed');
     assertSources(fixture.root, originals);
     assertNoStagedFiles(fixture.root);
+
+    const cleanup = await applyRenamePlan(plan, {
+      ...base,
+      rm: async (target, options) => {
+        if (String(target).endsWith('.restore')) throw new Error('injected cleanup failure');
+        await rm(target, options);
+      },
+    });
+    assert.equal('category' in cleanup && cleanup.code, 'rename-write-failed');
+    assert.match('category' in cleanup ? cleanup.message : '', /Rename committed/);
+    assert.notDeepEqual(readFileSync(path.join(fixture.root, plan.files[0]!.path)), originals.get(plan.files[0]!.path));
+    assert.ok(readdirSync(path.dirname(path.join(fixture.root, plan.files[0]!.path))).some((entry) => entry.endsWith('.restore')));
   } finally {
     fixture.close();
   }
@@ -97,9 +114,11 @@ function testPlan(root: string, paths: readonly string[]): RenamePlan {
     to: 'renamed',
     files: paths.map((file) => {
       const source = readFileSync(path.join(root, file));
-      const startByte = source.indexOf(Buffer.from('rename'));
-      assert.notEqual(startByte, -1);
-      return { path: file, snapshot: source.toString('base64'), edits: [{ startByte, endByte: startByte + 'rename'.length, line: 1, col: 1, oldText: 'rename', replacement: 'renamed' }] };
+      const text = source.toString('utf8');
+      const oldText = file.includes('shorthand') ? 'renameShorthandValue' : 'renameStringValue';
+      const startUtf16 = text.indexOf(oldText);
+      assert.notEqual(startUtf16, -1);
+      return { path: file, snapshot: source.toString('base64'), edits: [{ startUtf16, endUtf16: startUtf16 + oldText.length, line: 1, col: 1, oldText, replacement: oldText.replace('rename', 'renamed') }] };
     }),
   };
 }

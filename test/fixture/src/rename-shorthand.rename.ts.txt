@@ -1,3 +1,4 @@
+export const renameEmojiPrefix = '😀';
 export const renameShorthandValue = 1;
 
 export const renameShorthandObject = { renameShorthandValue };

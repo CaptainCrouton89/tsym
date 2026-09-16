@@ -25,13 +25,14 @@ const handler: SemanticHandler = async (context, invocation) => {
   const declaration = await context.resolver.resolve(input);
   try {
     const response = await context.session.withOpen(declaration.file, async () => {
+      const configured = await context.session.request('configure', { preferences: { providePrefixAndSuffixTextForRename: true } });
+      if (configured.success === false) throw new Error(configured.message ?? 'TypeScript rejected the rename preferences.');
       const result = await context.session.request('rename', {
         file: declaration.file,
         line: declaration.location.line,
         offset: declaration.location.col,
         findInStrings: false,
         findInComments: false,
-        providePrefixAndSuffixTextForRename: true,
       });
       if (result.success === false) throw new Error(result.message ?? 'TypeScript rejected the rename request.');
       return result.body as RenameResponse;
@@ -62,7 +63,7 @@ function buildPlan(root: string, symbol: string, from: string, to: string, locat
     const file = path.resolve(location.file);
     const source = read(file);
     const display = path.relative(root, file).split(path.sep).join('/');
-    const edits = location.locs.map((location) => editFromLocation(source, location, to)).sort((left, right) => left.startByte - right.startByte || left.endByte - right.endByte);
+    const edits = location.locs.map((location) => editFromLocation(source, location, to)).sort((left, right) => left.startUtf16 - right.startUtf16 || left.endUtf16 - right.endUtf16);
     return { path: display, snapshot: Buffer.from(source).toString('base64'), edits };
   }).sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
   return { root, symbol, from, to, files };
@@ -72,8 +73,8 @@ function editFromLocation(source: string, location: RenameLocation, newName: str
   const start = utf16Offset(source, location.start);
   const end = utf16Offset(source, location.end);
   return {
-    startByte: Buffer.byteLength(source.slice(0, start)),
-    endByte: Buffer.byteLength(source.slice(0, end)),
+    startUtf16: start,
+    endUtf16: end,
     line: location.start.line,
     col: location.start.offset,
     oldText: source.slice(start, end),

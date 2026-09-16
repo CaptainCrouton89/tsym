@@ -4,8 +4,8 @@ import { randomUUID } from 'node:crypto';
 import type { ToolError } from './types.js';
 
 export interface RenameEdit {
-  startByte: number;
-  endByte: number;
+  startUtf16: number;
+  endUtf16: number;
   line: number;
   col: number;
   oldText: string;
@@ -79,8 +79,6 @@ export async function applyRenamePlan(plan: RenamePlan, operations: RenameFileOp
       await operations.rename(entry.temp, absolutePath(plan.root, entry.file.path));
       entry.replaced = true;
     }
-    for (const entry of prepared) await operations.rm(entry.restore, { force: false });
-    return { applied: true };
   } catch (error) {
     const rollbackFailures: string[] = [];
     for (const entry of [...prepared].reverse()) {
@@ -105,24 +103,44 @@ export async function applyRenamePlan(plan: RenamePlan, operations: RenameFileOp
     }
     return writeFailure(`Rename commit failed and every replaced file was restored: ${message(error)}.`, 'Fix the filesystem error, then re-run rename.');
   }
+
+  const cleanupFailures: string[] = [];
+  for (const entry of prepared) {
+    try { await operations.rm(entry.restore, { force: false }); }
+    catch { cleanupFailures.push(entry.restore); }
+  }
+  if (cleanupFailures.length > 0) {
+    return {
+      category: 'tool',
+      code: 'rename-write-failed',
+      message: `Rename committed, but cleanup could not remove restore files. Changed files: ${prepared.map((entry) => entry.file.path).join(', ')}. Restore files still present: ${cleanupFailures.join(', ')}.`,
+      received: cleanupFailures.join(', '),
+      expected: 'all restore files to be removed after every replacement was committed',
+      next: 'Verify the changed files, then remove the listed restore files.',
+    };
+  }
+  return { applied: true };
 }
 
 function orderedFiles(plan: RenamePlan): RenameFilePlan[] { return [...plan.files].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0); }
 function absolutePath(root: string, file: string): string { return path.resolve(root, file); }
 
 function applyEdits(source: Buffer, file: RenameFilePlan): Buffer {
-  const edits = [...file.edits].sort((left, right) => left.startByte - right.startByte || left.endByte - right.endByte);
+  const text = source.toString('utf8');
+  const edits = [...file.edits].sort((left, right) => left.startUtf16 - right.startUtf16 || left.endUtf16 - right.endUtf16);
   let previous = 0;
   for (const edit of edits) {
-    if (!Number.isInteger(edit.startByte) || !Number.isInteger(edit.endByte) || edit.startByte < previous || edit.endByte < edit.startByte || edit.endByte > source.length) throw new Error(`Invalid or overlapping edit in ${file.path}.`);
-    previous = edit.endByte;
+    if (!Number.isInteger(edit.startUtf16) || !Number.isInteger(edit.endUtf16) || edit.startUtf16 < previous || edit.endUtf16 < edit.startUtf16 || edit.endUtf16 > text.length) throw new Error(`Invalid or overlapping edit in ${file.path}.`);
+    previous = edit.endUtf16;
   }
   const chunks: Buffer[] = [];
   let end = source.length;
   for (const edit of [...edits].reverse()) {
-    chunks.unshift(source.subarray(edit.endByte, end));
+    const startByte = Buffer.byteLength(text.slice(0, edit.startUtf16));
+    const endByte = Buffer.byteLength(text.slice(0, edit.endUtf16));
+    chunks.unshift(source.subarray(endByte, end));
     chunks.unshift(Buffer.from(edit.replacement));
-    end = edit.startByte;
+    end = startByte;
   }
   chunks.unshift(source.subarray(0, end));
   return Buffer.concat(chunks);

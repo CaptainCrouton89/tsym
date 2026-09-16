@@ -26,6 +26,17 @@ const renameApplyFilters: Constraint = {
   },
 };
 
+const renameIdentifier: Constraint = {
+  check(input) {
+    const name = input.args[1];
+    if (input.args.length !== 2 || !name || identifier.test(name) && !keywords.has(name)) return [];
+    return [{ field: '<newName>', received: name, expected: 'a TypeScript identifier that is not a reserved keyword', next: 'Choose a valid replacement identifier, then retry rename.' }];
+  },
+};
+
+const identifier = /^[$_\p{ID_Start}][$_\u200C\u200D\p{ID_Continue}]*$/u;
+const keywords = new Set(['await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'new', 'null', 'return', 'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield']);
+
 function leaf(name: string, description: string, whenToUse: string, handler: CommandDeclaration['handler'], argument: CommandDeclaration['argument'], flags: readonly FlagDeclaration[], output: string, effects = 'None.'): CommandDeclaration {
   return { name, description, whenToUse, handler, argument, flags, output, effects };
 }
@@ -42,7 +53,7 @@ export const commandTree: CommandDeclaration = {
     { ...leaf('inspect', 'How a symbol relates to the rest of the code.', 'Reach for this for references, callers, calls, or implementations; all four run by default.', 'inspect', { name: 'symbol', repeat: '1+', description: 'path:line:col, or a name. Each symbol gets its own result block.' }, [{ name: '--only', type: 'string', repeat: true, values: relations, description: `Run only these relations: ${relations.join(', ')}. Default: all four.` }, { name: '--each', type: 'int', default: 10, minimum: 0, description: 'Rows per relation. Use 0 for every row.' }, { name: '--depth', type: 'int', default: 1, minimum: 1, description: 'Levels to follow for callers and calls.' }, { name: '--graph', type: 'bool', description: 'Render callers and calls as one Mermaid graph.' }, ...filters], 'One <inspect> element per symbol, or one graph for all seeds. Counts are true totals; --each caps display only.', 'None.'), constraints: [selectedTraversal] }, 
     leaf('search', 'Structural syntax search over the source.', 'Reach for this when the pattern is syntax shape rather than a named symbol.', 'search', { name: 'pattern', repeat: '1', description: 'An ast-grep pattern. $NAME captures a node; $$$NAME captures a list.' }, [{ name: '--lang', type: 'string', default: 'ts', values: ['ts', 'tsx', 'js', 'jsx'], description: 'Parser language: ts, tsx, js, or jsx. tsx is selected automatically for .tsx files.' }, ...filters, { name: '--limit', type: 'int', minimum: 0, description: 'Cap rows.' }], 'One <search> element with deterministic match rows.'),
     leaf('check', 'Semantic and syntactic diagnostics.', 'Reach for this after editing to check changed files or the complete program.', 'check', { name: 'path', repeat: '0+', description: 'Files or globs. Default: the whole program.' }, [{ name: '--errors-only', type: 'bool', description: 'Drop warnings and suggestions.' }, ...filters, { name: '--limit', type: 'int', minimum: 0, description: 'Cap diagnostics.' }], 'One <check> element with ordered diagnostics.', 'Opens and closes documents. No persistent change.'),
-    { ...leaf('rename', 'Rename a symbol across the program.', 'Reach for this instead of editing call sites by hand when a rename crosses files.', 'rename', { name: 'symbol and newName', repeat: '1+', description: 'Exactly two values: path:line:col or a name, then the replacement identifier. A usage address resolves to its declaration first.' }, [{ name: '--apply', type: 'bool', description: 'Write the complete compiler-provided edit plan. Rejected with path filters.' }, ...filters], 'One <rename> element with one <file> per affected file. Each row is line:col  old → new; applied says whether writes completed.', 'Without --apply: none. With --apply: every planned file is rewritten, all or none for failures observed by this process.'), constraints: [renameApplyFilters] },
+    { ...leaf('rename', 'Rename a symbol across the program.', 'Reach for this instead of editing call sites by hand when a rename crosses files.', 'rename', { name: 'symbol and newName', repeat: '1+', description: 'Exactly two values: path:line:col or a name, then the replacement identifier. A usage address resolves to its declaration first.' }, [{ name: '--apply', type: 'bool', description: 'Write the complete compiler-provided edit plan. Rejected with path filters.' }, ...filters], 'One <rename> element with one <file> per affected file. Each row is line:col  old → new; applied says whether writes completed.', 'Without --apply: none. With --apply: every planned file is rewritten, all or none for failures observed by this process.'), constraints: [renameApplyFilters, renameIdentifier] },
     {
       name: 'server', description: 'The resident TypeScript process.', whenToUse: 'Reach for this only when the server is wrong rather than absent, such as after a branch switch or dependency install.',
       model: 'One server per workspace root holds a loaded program. Ordinary file edits need nothing; reload is for changes to program shape.',
