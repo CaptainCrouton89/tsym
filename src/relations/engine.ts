@@ -40,7 +40,7 @@ export async function implementations(context: SemanticContext, record: Declarat
   for (const definition of definitions) {
     if (external(definition.file)) continue;
     const result = await recordFor(context, definition);
-    if (result) rows.push(result);
+    if (result && result.address !== record.address) rows.push(result);
   }
   return unique(rows);
 }

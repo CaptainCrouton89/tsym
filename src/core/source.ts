@@ -44,11 +44,9 @@ function declarationAt(node: ts.Node, source: ts.SourceFile, compiler: typeof ts
 
 function ownerAt(node: ts.Node, source: ts.SourceFile, compiler: typeof ts): SyntaxDeclaration | null {
   let current: ts.Node | undefined = node;
-  let insideUnnamedCallback = false;
-  for (let ancestor = current; ancestor; ancestor = ancestor.parent) if (isUnnamedCallback(ancestor, compiler)) insideUnnamedCallback = true;
   while (current) {
     const declaration = declarationFor(current, compiler);
-    if (declaration && (!insideUnnamedCallback || namedCallable(declaration, compiler))) return describe(declaration, source, compiler);
+    if (declaration && namedCallable(declaration, compiler)) return describe(declaration, source, compiler);
     current = current.parent;
   }
   return null;
@@ -57,11 +55,6 @@ function ownerAt(node: ts.Node, source: ts.SourceFile, compiler: typeof ts): Syn
 function declarationFor(node: ts.Node, compiler: typeof ts): ts.Declaration | null {
   if (compiler.isVariableDeclaration(node) || compiler.isFunctionDeclaration(node) || compiler.isFunctionExpression(node) || compiler.isClassDeclaration(node) || compiler.isInterfaceDeclaration(node) || compiler.isTypeAliasDeclaration(node) || compiler.isEnumDeclaration(node) || compiler.isMethodDeclaration(node) || compiler.isPropertyDeclaration(node) || compiler.isGetAccessorDeclaration(node) || compiler.isSetAccessorDeclaration(node) || compiler.isParameter(node) || compiler.isImportSpecifier(node) || compiler.isExportSpecifier(node)) return node;
   return null;
-}
-
-function isUnnamedCallback(node: ts.Node, compiler: typeof ts): boolean {
-  if (compiler.isArrowFunction(node)) return true;
-  return compiler.isFunctionExpression(node) && !node.name;
 }
 
 function namedCallable(node: ts.Declaration, compiler: typeof ts): boolean {

@@ -51,7 +51,7 @@ export function classifyTarget(context: SemanticContext, target: DefinitionTarge
   const source = parse(context, file, compiler);
   let node: ts.Node | undefined = tokenAt(source, source.getPositionOfLineAndCharacter(target.start.line - 1, target.start.offset - 1));
   while (node) {
-    if (compiler.isMethodSignature(node) || compiler.isCallSignatureDeclaration(node) || compiler.isConstructSignatureDeclaration(node)) return 'dispatch';
+    if (compiler.isMethodSignature(node)) return 'dispatch';
     if ((compiler.isMethodDeclaration(node) || compiler.isFunctionDeclaration(node)) && hasModifier(node, compiler.SyntaxKind.AbstractKeyword, compiler)) return 'dispatch';
     if (hasModifier(node, compiler.SyntaxKind.DeclareKeyword, compiler)) return 'dispatch';
     if (namedCallable(node, compiler)) {
