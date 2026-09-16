@@ -29,7 +29,7 @@ function run(root: string, cache: string, ...args: string[]) {
   return spawnSync(process.execPath, ['dist/cli.js', '--root', root, ...args], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } });
 }
 
-test('rename previews shorthand and string-literal edits without writing, then applies exactly the preview files', () => {
+test('rename previews shorthand without writing and refuses string-literal element access', () => {
   const fixture = copiedFixture();
   try {
     const shorthand = path.join(fixture.root, 'src/rename-shorthand.ts');
@@ -44,8 +44,13 @@ test('rename previews shorthand and string-literal edits without writing, then a
     assert.deepEqual(readFileSync(stringLiteral), before.get(stringLiteral));
 
     const stringPreview = run(fixture.root, fixture.cache, 'rename', 'src/rename-string-literal.ts:2:4', 'renamedStringValue');
-    assert.equal(stringPreview.status, 0, stringPreview.stderr);
-    assert.match(stringPreview.stdout, /6:53  renameStringValue → renamedStringValue/);
+    assert.equal(stringPreview.status, 2, stringPreview.stderr);
+    assert.match(stringPreview.stdout, /rename-through-string-literal/);
+    assert.match(stringPreview.stdout, /src\/rename-string-literal\.ts:6:52/);
+    assert.deepEqual(readFileSync(stringLiteral), before.get(stringLiteral));
+    const stringApply = run(fixture.root, fixture.cache, 'rename', 'src/rename-string-literal.ts:2:4', 'renamedStringValue', '--apply');
+    assert.equal(stringApply.status, 2, stringApply.stderr);
+    assert.match(stringApply.stdout, /rename-through-string-literal/);
     assert.deepEqual(readFileSync(stringLiteral), before.get(stringLiteral));
 
     const applied = run(fixture.root, fixture.cache, 'rename', 'renameShorthandValue', 'renamedShorthandValue', '--apply');

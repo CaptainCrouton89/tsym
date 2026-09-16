@@ -1,20 +1,11 @@
 import path from 'node:path';
 import { matchesPathFilters } from '../../core/receipt.js';
+import { RenamePreflightError, renameFromOccurrences } from '../../ts7/checker.js';
+import { query } from '../../store/query.js';
+import type { StoreRow } from '../../store/store.js';
 import type { RenameEdit, RenameFilePlan, RenamePlan } from '../rename-apply.js';
 import type { Answer, InvocationError } from '../types.js';
 import type { SemanticHandler } from '../handlers.js';
-
-interface RenameLocation {
-  start: { line: number; offset: number };
-  end: { line: number; offset: number };
-  prefixText?: string;
-  suffixText?: string;
-}
-
-interface RenameResponse {
-  info?: { canRename?: boolean; localizedErrorMessage?: string };
-  locs?: { file: string; locs: RenameLocation[] }[];
-}
 
 const handler: SemanticHandler = async (context, invocation) => {
   const [input, newName] = invocation.input.args;
@@ -23,24 +14,9 @@ const handler: SemanticHandler = async (context, invocation) => {
   await context.projects.bootstrap();
   const declaration = await context.resolver.resolve(input);
   try {
-    const response = await context.session.withOpen(declaration.file, async () => {
-      const configured = await context.session.request('configure', { preferences: { providePrefixAndSuffixTextForRename: true } });
-      if (configured.success === false) throw new Error(configured.message ?? 'TypeScript rejected the rename preferences.');
-      const result = await context.session.request('rename', {
-        file: declaration.file,
-        line: declaration.location.line,
-        offset: declaration.location.col,
-        findInStrings: false,
-        findInComments: false,
-      });
-      if (result.success === false) throw new Error(result.message ?? 'TypeScript rejected the rename request.');
-      return result.body as RenameResponse;
-    });
-    if (response.info?.canRename === false) {
-      return invalid(response.info.localizedErrorMessage ?? 'TypeScript cannot rename this symbol.', input, 'a symbol TypeScript can rename');
-    }
-
-    const plan = buildPlan(context.root, declaration.address, declaration.name, newName, response.locs ?? [], context.source.read.bind(context.source));
+    if (!context.store) throw new Error('The TypeScript index is not available yet.');
+    const edits = renameFromOccurrences(context.program, context.root, context.projects.configured(), declaration, occurrences(context.store, declaration.location.path, declaration.location.line, declaration.location.col), newName);
+    const plan = buildPlan(context.root, declaration.address, declaration.name, newName, edits, context.source.read.bind(context.source));
     const visible = plan.files.filter((file) => matchesPathFilters(file.path, { in: strings(invocation.input.flags['--in']), exclude: strings(invocation.input.flags['--exclude']) }));
     const sites = visible.reduce((total, file) => total + file.edits.length, 0);
     const answer: Answer & { renamePlan: RenamePlan } = {
@@ -51,44 +27,27 @@ const handler: SemanticHandler = async (context, invocation) => {
     };
     return answer;
   } catch (error) {
-    return { category: 'tool', code: 'typescript-error', message: `TypeScript could not prepare this rename: ${message(error)}.`, received: input, expected: 'compiler-provided rename locations', next: 'Read server status and retry after repairing the workspace.' };
+    if (error instanceof RenamePreflightError) return refusal(error, input);
+    return { category: 'tool', code: 'typescript-error', message: `TypeScript could not prepare this rename: ${message(error)}.`, received: input, expected: 'checker-resolved occurrence locations', next: 'Read server status and retry after repairing the workspace.' };
   }
 };
 
-function buildPlan(root: string, symbol: string, from: string, to: string, locations: readonly { file: string; locs: RenameLocation[] }[], read: (file: string) => string): RenamePlan {
-  const files = locations.map((location): RenameFilePlan => {
-    const file = path.resolve(location.file);
-    const source = read(file);
-    const display = path.relative(root, file).split(path.sep).join('/');
-    const edits = location.locs.map((location) => editFromLocation(source, location, to)).sort((left, right) => left.startUtf16 - right.startUtf16 || left.endUtf16 - right.endUtf16);
-    return { path: display, snapshot: Buffer.from(source).toString('base64'), edits };
-  }).sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+function occurrences(store: import('../../store/store.js').Store, file: string, line: number, col: number): Array<{ file: string; line: number; col: number }> {
+  return query(store, 'MATCH (owner:Declaration)-[r:REFERENCES]->(d:Declaration) WHERE d.file = $file AND d.line = $line AND d.col = $col RETURN owner.file AS file, r.line AS line, r.col AS col', { file, line, col }).map((row: StoreRow) => ({ file: String(row.file), line: Number(row.line), col: Number(row.col) }));
+}
+
+function buildPlan(root: string, symbol: string, from: string, to: string, locations: readonly ({ file: string; line: number; col: number } & RenameEdit)[], read: (file: string) => string): RenamePlan {
+  const grouped = new Map<string, RenameEdit[]>();
+  for (const location of locations) {
+    const file = path.resolve(root, location.file);
+    grouped.set(file, [...(grouped.get(file) ?? []), { startUtf16: location.startUtf16, endUtf16: location.endUtf16, line: location.line, col: location.col, oldText: location.oldText, replacement: location.replacement }]);
+  }
+  const files = [...grouped].map(([file, edits]): RenameFilePlan => ({ path: path.relative(root, file).split(path.sep).join('/'), snapshot: Buffer.from(read(file)).toString('base64'), edits: edits.sort((left, right) => left.startUtf16 - right.startUtf16 || left.endUtf16 - right.endUtf16) })).sort((left, right) => left.path.localeCompare(right.path));
   return { root, symbol, from, to, files };
 }
 
-function editFromLocation(source: string, location: RenameLocation, newName: string): RenameEdit {
-  const start = utf16Offset(source, location.start);
-  const end = utf16Offset(source, location.end);
-  return {
-    startUtf16: start,
-    endUtf16: end,
-    line: location.start.line,
-    col: location.start.offset,
-    oldText: source.slice(start, end),
-    replacement: `${location.prefixText ?? ''}${newName}${location.suffixText ?? ''}`,
-  };
-}
-
-function utf16Offset(source: string, position: { line: number; offset: number }): number {
-  let start = 0;
-  for (let line = 1; line < position.line; line++) {
-    const newline = source.indexOf('\n', start);
-    if (newline < 0) throw new Error(`TypeScript returned a rename location after the end of the source at ${position.line}:${position.offset}.`);
-    start = newline + 1;
-  }
-  const result = start + position.offset - 1;
-  if (result < start || result > source.length) throw new Error(`TypeScript returned an invalid rename location at ${position.line}:${position.offset}.`);
-  return result;
+function refusal(error: RenamePreflightError, received: string): InvocationError {
+  return { category: 'invocation', code: error.code, problems: [{ field: '<symbol>', received: `${error.site}: ${error.message}`, expected: 'a rename without an unsupported site or name conflict', next: 'Choose a different symbol or replacement identifier, then retry rename.' }] };
 }
 
 function renderFile(file: RenameFilePlan) {

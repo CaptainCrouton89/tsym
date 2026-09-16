@@ -1,7 +1,9 @@
 import path from 'node:path';
-import { DiagnosticCategory, type Diagnostic, type Project, type Type } from 'typescript/unstable/sync';
+import { DiagnosticCategory, SymbolFlags, type Diagnostic, type Project, type Snapshot, type Symbol as TsSymbol, type Type } from 'typescript/unstable/sync';
 import { SyntaxKind, isFunctionLikeDeclaration, isTypeNode, type Node, type TypeNode } from 'typescript/unstable/ast';
+import * as ts from './ast.js';
 import { Ts7Host } from './api.js';
+import { ConfiguredProjects } from './projects.js';
 
 export interface TypeAnswer {
   kind: string;
@@ -19,6 +21,13 @@ export interface CheckerDiagnostic {
   severity: string;
   code: number;
   message: string;
+}
+
+export interface RenameOccurrence { file: string; line: number; col: number; }
+export interface CheckerRenameEdit extends RenameOccurrence { startUtf16: number; endUtf16: number; oldText: string; replacement: string; }
+
+export class RenamePreflightError extends Error {
+  constructor(readonly code: 'rename-through-string-literal' | 'rename-through-computed-name' | 'rename-outside-workspace' | 'rename-conflict', readonly site: string, message: string) { super(message); }
 }
 
 export function typeAt(host: Ts7Host, root: string, config: string, file: string, position: number, fallback: { kind: string; name: string; address: string }): TypeAnswer | null {
@@ -57,6 +66,219 @@ export function diagnosticsForFiles(host: Ts7Host, root: string, scopes: readonl
     return unique(diagnostics);
   });
 }
+
+/** Builds rename edits from indexed reference sites and rejects shapes TS7 cannot rewrite safely. */
+export function renameFromOccurrences(host: Ts7Host, root: string, projects: ConfiguredProjects, declaration: { file: string; nameSpan: { start: number }; address: string; name: string }, occurrences: readonly RenameOccurrence[], newName: string): CheckerRenameEdit[] {
+  return host.withSnapshot((snapshot) => {
+    const declarationProject = projects.membership(declaration.file);
+    if (!declarationProject) throw new Error(`The declaration ${declaration.address} is not in a configured TypeScript project.`);
+    const project = snapshot.getProject(declarationProject.config);
+    if (!project) throw new Error(`TypeScript project ${declarationProject.config} is not loaded.`);
+    const renamed = symbolAt(project, declaration.file, declaration.nameSpan.start);
+    if (!renamed) throw new Error(`TypeScript could not resolve ${declaration.address}.`);
+    const target = unalias(project, renamed);
+    assertWorkspaceDeclarations(root, project, target, declaration.address);
+    assertNoStringLiteralRename(root, projects, snapshot, target, declaration.name);
+
+    const edits = new Map<string, CheckerRenameEdit>();
+    const sites = new Map<string, RenameOccurrence>();
+    for (const occurrence of [...occurrences, ...shapeOccurrences(root, projects, snapshot, target)]) sites.set(address(occurrence), occurrence);
+    for (const occurrence of sites.values()) {
+      const file = path.resolve(root, occurrence.file);
+      const membership = projects.membership(file);
+      if (!membership) throw new Error(`The indexed rename site ${address(occurrence)} is not in a configured TypeScript project.`);
+      const siteProject = snapshot.getProject(membership.config);
+      if (!siteProject) throw new Error(`TypeScript project ${membership.config} is not loaded.`);
+      const source = siteProject.program.getSourceFile(file);
+      if (!source) throw new Error(`TypeScript could not load ${occurrence.file} for rename.`);
+      const position = source.getPositionOfLineAndCharacter(occurrence.line - 1, occurrence.col - 1);
+      const node = nodeAt(source, position);
+      if (!node || !ts.isIdentifier(node)) throw new Error(`The indexed rename site ${address(occurrence)} is not an identifier in the current program.`);
+      if (hasComputedName(node)) throw new RenamePreflightError('rename-through-computed-name', address(occurrence), `Cannot rename through computed property name at ${address(occurrence)}.`);
+      const expected = symbolForRenameNode(siteProject, file, node);
+      if (!expected || !sameSymbol(siteProject, expected, target)) throw new Error(`The indexed rename site ${address(occurrence)} no longer resolves to ${declaration.address}.`);
+      if (isExportAlias(node)) continue;
+      assertNoConflict(siteProject, target, newName, node, address(occurrence));
+      const edit = editForNode(siteProject, source, node, target, newName);
+      edits.set(`${occurrence.file}:${edit.startUtf16}:${edit.endUtf16}`, { ...occurrence, ...edit });
+    }
+
+    const declarationSource = project.program.getSourceFile(declaration.file);
+    const declarationNode = declarationSource && nodeAt(declarationSource, declaration.nameSpan.start);
+    if (declarationNode) assertNoConflict(project, target, newName, declarationNode, declaration.address);
+    return [...edits.values()].sort((left, right) => left.file.localeCompare(right.file) || left.startUtf16 - right.startUtf16 || left.endUtf16 - right.endUtf16);
+  });
+}
+
+function assertWorkspaceDeclarations(root: string, project: Project, symbol: TsSymbol, site: string): void {
+  for (const handle of symbol.declarations) {
+    const declaration = handle.resolve(project);
+    if (declaration && !inside(root, declaration.getSourceFile().fileName)) throw new RenamePreflightError('rename-outside-workspace', site, `Cannot rename ${symbol.name}: a declaration is outside the workspace at ${declaration.getSourceFile().fileName}.`);
+  }
+}
+
+function assertNoStringLiteralRename(root: string, projects: ConfiguredProjects, snapshot: Snapshot, target: TsSymbol, name: string): void {
+  for (const scope of projects.records()) {
+    const project = snapshot.getProject(scope.config);
+    if (!project) continue;
+    for (const file of scope.files) {
+      const source = project.program.getSourceFile(file);
+      if (!source) continue;
+      const string = firstStringElementAccess(source, (node) => node.argumentExpression.getText(source) === `'${name}'` || node.argumentExpression.getText(source) === `\"${name}\"`, (argument) => {
+        const symbol = symbolAt(project, file, argument.getStart(source));
+        return !!symbol && sameSymbol(project, symbol, target);
+      });
+      if (string) {
+        const point = source.getLineAndCharacterOfPosition(string.getStart(source));
+        throw new RenamePreflightError('rename-through-string-literal', `${relative(root, file)}:${point.line + 1}:${point.character + 1}`, `Cannot rename through string-literal element access at ${relative(root, file)}:${point.line + 1}:${point.character + 1}.`);
+      }
+    }
+  }
+}
+
+function shapeOccurrences(root: string, projects: ConfiguredProjects, snapshot: Snapshot, target: TsSymbol): RenameOccurrence[] {
+  const sites = new Map<string, RenameOccurrence>();
+  const add = (file: string, source: ts.SourceFile, node: Node) => {
+    if (!ts.isIdentifier(node)) return;
+    const point = source.getLineAndCharacterOfPosition(node.getStart(source));
+    const site = { file: relative(root, file), line: point.line + 1, col: point.character + 1 };
+    sites.set(address(site), site);
+  };
+  const visit = (project: Project, file: string, source: ts.SourceFile, node: Node): void => {
+    if (ts.isShorthandPropertyAssignment(node) && ts.isIdentifier(node.name)) {
+      const value = project.checker.getShorthandAssignmentValueSymbol(node);
+      if (value && sameSymbol(project, value, target)) add(file, source, node.name);
+    }
+    if (ts.isExportSpecifier(node)) {
+      const value = project.checker.getExportSpecifierLocalTargetSymbol(node);
+      if (value && sameSymbol(project, value, target)) add(file, source, node.propertyName ?? node.name);
+    }
+    if (ts.isExportAssignment(node) && !node.isExportEquals && ts.isIdentifier(node.expression)) {
+      const value = symbolAt(project, file, node.expression.getStart(source));
+      if (value && sameSymbol(project, value, target)) add(file, source, node.expression);
+    }
+    if (ts.isObjectLiteralElementLike(node)) {
+      const name = 'name' in node ? node.name : undefined;
+      if (name && ts.isIdentifier(name)) {
+        const property = contextualObjectProperty(project, name);
+        if (property && sameSymbol(project, property, target)) add(file, source, name);
+      }
+    }
+    if (ts.isBindingElement(node)) {
+      const bindingName = node.name;
+      if (bindingName && ts.isIdentifier(bindingName)) {
+        const property = destructuredProperty(project, bindingName);
+        if (property && sameSymbol(project, property, target)) add(file, source, bindingName);
+      }
+    }
+    node.forEachChild((child) => visit(project, file, source, child));
+  };
+  for (const scope of projects.records()) {
+    const project = snapshot.getProject(scope.config);
+    if (!project) continue;
+    for (const file of scope.files) {
+      if (projects.membership(file)?.config !== scope.config) continue;
+      const source = project.program.getSourceFile(file);
+      if (source) visit(project, file, source, source);
+    }
+  }
+  return [...sites.values()];
+}
+
+function firstStringElementAccess(node: Node, namesSymbol: (node: ts.ElementAccessExpression) => boolean, matches: (argument: Node) => boolean): ts.StringLiteral | undefined {
+  if (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression) && namesSymbol(node) && matches(node.argumentExpression)) return node.argumentExpression;
+  let found: ts.StringLiteral | undefined;
+  node.forEachChild((child) => { if (!found) found = firstStringElementAccess(child, namesSymbol, matches); });
+  return found;
+}
+
+function assertNoConflict(project: Project, target: TsSymbol, name: string, location: Node, site: string): void {
+  const resolved = project.checker.resolveName(name, target.flags, location);
+  if (resolved && !sameSymbol(project, resolved, target)) throw conflict(project, name, site, resolved);
+  const member = memberNamed(project, location, name);
+  if (member && !sameSymbol(project, member, target)) throw conflict(project, name, site, member);
+}
+
+function memberNamed(project: Project, location: Node, name: string): TsSymbol | undefined {
+  if (ts.isPropertyAccessExpression(location.parent) && location.parent.name === location) {
+    const type = project.checker.getTypeAtLocation(location.parent.expression);
+    return type && project.checker.getPropertyOfType(type, name);
+  }
+  for (let current: Node | undefined = location.parent; current; current = current.parent) {
+    if (ts.isClassLikeDeclaration(current) || ts.isInterfaceDeclaration(current)) {
+      const type = project.checker.getTypeAtLocation(current);
+      return type && project.checker.getPropertyOfType(type, name);
+    }
+  }
+  return undefined;
+}
+
+function conflict(project: Project, name: string, site: string, resolved: TsSymbol): RenamePreflightError {
+  return new RenamePreflightError('rename-conflict', site, `Cannot rename to ${name}: it resolves to ${unalias(project, resolved).name} at ${site}.`);
+}
+
+function symbolForRenameNode(project: Project, file: string, node: ts.Identifier): TsSymbol | undefined {
+  if (ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node) return project.checker.getShorthandAssignmentValueSymbol(node.parent);
+  if (ts.isExportSpecifier(node.parent)) return project.checker.getExportSpecifierLocalTargetSymbol(node.parent);
+  return contextualObjectProperty(project, node) ?? destructuredProperty(project, node) ?? symbolAt(project, file, node.getStart(node.getSourceFile()));
+}
+
+function contextualObjectProperty(project: Project, node: ts.Identifier): TsSymbol | undefined {
+  const member = node.parent;
+  if (!member || !ts.isObjectLiteralElementLike(member) || !('name' in member) || member.name !== node) return undefined;
+  const object = member.parent;
+  const contextual = object && ts.isObjectLiteralExpression(object) ? project.checker.getContextualType(object) : undefined;
+  return contextual && project.checker.getPropertyOfType(contextual, node.text);
+}
+
+function destructuredProperty(project: Project, node: ts.Identifier): TsSymbol | undefined {
+  const element = node.parent;
+  if (!element || !ts.isBindingElement(element) || element.name !== node || element.propertyName) return undefined;
+  const pattern = element.parent;
+  const declaration = pattern?.parent;
+  if (!pattern || !ts.isObjectBindingPattern(pattern) || !declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer) return undefined;
+  const type = project.checker.getTypeAtLocation(declaration.initializer);
+  return type && project.checker.getPropertyOfType(type, node.text);
+}
+
+function isExportAlias(node: ts.Identifier): boolean { return ts.isExportSpecifier(node.parent) && node.parent.propertyName !== undefined && node.parent.name === node; }
+
+function editForNode(project: Project, source: ts.SourceFile, node: ts.Identifier, target: TsSymbol, newName: string): Pick<CheckerRenameEdit, 'startUtf16' | 'endUtf16' | 'oldText' | 'replacement'> {
+  const parent = node.parent;
+  const oldText = node.getText(source);
+  if (ts.isShorthandPropertyAssignment(parent) && parent.name === node) {
+    const value = project.checker.getShorthandAssignmentValueSymbol(parent);
+    if (value) return { startUtf16: node.getStart(source), endUtf16: node.getEnd(), oldText, replacement: sameSymbol(project, value, target) ? `${oldText}: ${newName}` : `${newName}: ${oldText}` };
+  }
+  if (ts.isBindingElement(parent) && parent.name === node && !parent.propertyName) return { startUtf16: node.getStart(source), endUtf16: node.getEnd(), oldText, replacement: `${newName}: ${oldText}` };
+  if (ts.isExportSpecifier(parent)) {
+    const local = project.checker.getExportSpecifierLocalTargetSymbol(parent);
+    if (local && sameSymbol(project, local, symbolAt(project, source.fileName, node.getStart(source))!)) {
+      if (parent.name === node && !parent.propertyName) return { startUtf16: node.getStart(source), endUtf16: node.getEnd(), oldText, replacement: `${newName} as ${oldText}` };
+    }
+  }
+  return { startUtf16: node.getStart(source), endUtf16: node.getEnd(), oldText, replacement: newName };
+}
+
+function hasComputedName(node: Node): boolean {
+  for (let current: Node | undefined = node; current; current = current.parent) if (ts.isComputedPropertyName(current)) return true;
+  return false;
+}
+
+function nodeAt(node: Node, position: number): Node | undefined {
+  let found: Node | undefined;
+  node.forEachChild((child) => { if (position >= child.getFullStart() && position < child.getEnd()) found = nodeAt(child, position) ?? found; });
+  return found ?? (node.getStart(node.getSourceFile()) === position ? node : undefined);
+}
+
+function symbolAt(project: Project, file: string, position: number): TsSymbol | undefined { return project.checker.getSymbolAtPosition(file, position); }
+function unalias(project: Project, symbol: TsSymbol): TsSymbol { return symbol.flags & SymbolFlags.Alias ? project.checker.getAliasedSymbol(symbol) : symbol; }
+function sameSymbol(project: Project, left: TsSymbol, right: TsSymbol): boolean {
+  const resolvedLeft = unalias(project, left);
+  const resolvedRight = unalias(project, right);
+  return resolvedLeft.id === resolvedRight.id || resolvedLeft.declarations.some((leftDeclaration) => resolvedRight.declarations.some((rightDeclaration) => leftDeclaration.path === rightDeclaration.path && leftDeclaration.index === rightDeclaration.index));
+}
+function address(site: RenameOccurrence): string { return `${site.file}:${site.line}:${site.col}`; }
 
 function renderSignature(project: Project, declaration: Node | undefined, type: Type, name: string, kind: string): string {
   if (declaration && isFunctionLikeDeclaration(declaration)) {
