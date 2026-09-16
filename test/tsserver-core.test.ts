@@ -10,7 +10,7 @@ import { SourceReader } from '../src/core/source.js';
 import { ProjectRegistry } from '../src/server/projects.js';
 import { TsServerSession } from '../src/server/tsserver.js';
 
-test('tsserver bootstrap closes its document and canonicalizes declaration and usage addresses', async () => {
+test('tsserver bootstrap retains its document and canonicalizes declaration and usage addresses', async () => {
   const temp = mkdtempSync(path.join(tmpdir(), 'symbols-project-'));
   const root = path.join(temp, 'fixture');
   cpSync('test/fixture', root, { recursive: true });
@@ -53,6 +53,62 @@ test('geterrForProject resolves on its requestCompleted event with every diagnos
     session.stop();
     rmSync(temp, { recursive: true, force: true });
   }
+});
+
+test('a failed scoped close frees the session request slot', async () => {
+  const session = new TsServerSession('/root');
+  const transport = session as unknown as {
+    child: { stdin: { write(body: string, callback?: (error: Error | null) => void): boolean } };
+    read(chunk: Buffer): void;
+  };
+  transport.child = {
+    stdin: {
+      write(body, callback) {
+        const request = JSON.parse(body) as { seq: number; command: string };
+        if (request.command === 'close') throw new Error('close write failed');
+        queueMicrotask(() => {
+          const response = JSON.stringify({ type: 'response', request_seq: request.seq, success: true });
+          transport.read(Buffer.from(`Content-Length: ${Buffer.byteLength(response)}\r\n\r\n${response}`));
+          callback?.(null);
+        });
+        return true;
+      },
+    },
+  };
+
+  await assert.rejects(session.withOpen('/root/file.ts', async () => undefined), /close write failed/);
+  await session.navto('still-usable');
+});
+
+test('a command callback failure frees ordinary and diagnostic request slots', async () => {
+  const session = new TsServerSession('/root');
+  const transport = session as unknown as {
+    child: { stdin: { write(body: string, callback?: (error: Error | null) => void): boolean } };
+    read(chunk: Buffer): void;
+  };
+  transport.child = {
+    stdin: {
+      write(body, callback) {
+        const request = JSON.parse(body) as { seq: number };
+        queueMicrotask(() => {
+          const response = JSON.stringify({ type: 'response', request_seq: request.seq, success: true });
+          transport.read(Buffer.from(`Content-Length: ${Buffer.byteLength(response)}\r\n\r\n${response}`));
+          callback?.(null);
+        });
+        return true;
+      },
+    },
+  };
+
+  session.setCommandHandler(() => { throw new Error('command callback failed'); });
+  await assert.rejects(session.navto('first'), /command callback failed/);
+  session.setCommandHandler(() => {});
+  await session.navto('second');
+
+  session.setCommandHandler(() => { throw new Error('command callback failed'); });
+  await assert.rejects(session.diagnosticsForProject('/root/file.ts'), /command callback failed/);
+  session.setCommandHandler(() => {});
+  await session.navto('third');
 });
 
 test('a resolver rejection inside a handler becomes an exit-2 invocation error, not a tool error', async () => {

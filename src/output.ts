@@ -48,7 +48,11 @@ function renderToolError(error: ToolError): string {
 }
 
 function receipt(completion: Completion): string {
-  if (isAnswer(completion)) return completion.receipt ?? `${completion.count} answer${completion.count === 1 ? '' : 's'}, 0 ms`;
+  if (isAnswer(completion)) {
+    const answer = completion as Answer & { startupMs?: number };
+    const base = answer.receipt ?? `${answer.count} answer${answer.count === 1 ? '' : 's'}, 0 ms`;
+    return answer.startupMs === undefined ? base : `${base} (server started, ${answer.startupMs} ms)`;
+  }
   return completion.category === 'invocation' ? `invocation rejected, 0 ms` : `tool failed, 0 ms`;
 }
 

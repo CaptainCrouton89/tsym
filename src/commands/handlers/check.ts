@@ -88,7 +88,7 @@ async function diagnosticsForProjects(context: Parameters<SemanticHandler>[0]): 
   const diagnostics: Diagnostic[] = [];
   for (const project of context.projects.records()) {
     if (!project.bootstrap) continue;
-    const events = await context.session.withOpen(project.bootstrap, () => context.session.diagnosticsForProject(project.bootstrap!));
+    const events = await context.session.diagnosticsForProject(project.bootstrap);
     diagnostics.push(...eventDiagnostics(context.root, events), ...configDiagnostics(context.root, context.session.drainEvents('configFileDiag')));
   }
   return unique(diagnostics);

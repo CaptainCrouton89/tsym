@@ -76,6 +76,14 @@ test('check reports file diagnostics, filters before the limit, and clean files 
     assert.match(project.stdout, /scope="project" errors="1" warnings="0" suggestions="0"/);
     assert.doesNotMatch(project.stdout, /lib\.dom\.d\.ts/);
 
+    const findAfterProjectCheck = run('find', 'greet');
+    assert.equal(findAfterProjectCheck.status, 0, 'a whole-project check keeps the configured project resident');
+    assert.match(findAfterProjectCheck.stdout, /src\/greet.ts:2:17  function  export  greet/);
+
+    const inspectAfterProjectCheck = run('inspect', 'shout', '--only', 'calls', '--each', '0');
+    assert.equal(inspectAfterProjectCheck.status, 0);
+    assert.match(inspectAfterProjectCheck.stdout, /<calls count="1" files="1" shown="1">/);
+
     const outsideProgram = run('check', 'README.md');
     assert.equal(outsideProgram.status, 2);
     assert.match(outsideProgram.stderr, /README\.md exists but is not part of a TypeScript project/);

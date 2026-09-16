@@ -22,13 +22,20 @@ export class ProjectRegistry {
       const candidate = candidateForConfig(config, compiler);
       if (!candidate) continue;
       await this.session.open(candidate);
+      let retained = false;
       try {
         const info = await this.session.projectInfo(candidate);
         const reported = info.configFileName;
         if (!reported || reported === '/dev/null') continue;
+        const config = path.resolve(reported);
+        if (this.projects.has(config)) continue;
         const files = new Set((info.fileNames ?? []).map((file) => path.resolve(file)));
-        this.projects.set(path.resolve(reported), { config: path.resolve(reported), files, bootstrap: candidate });
-      } finally { await this.session.close(candidate); }
+        // Keeps tsserver's configured project resident; registry owns its lifetime.
+        this.projects.set(config, { config, files, bootstrap: candidate });
+        retained = true;
+      } finally {
+        if (!retained) await this.session.close(candidate);
+      }
     }
     this.loaded = true;
     if (this.projects.size === 0) throw new Error(`No configured TypeScript project exists under ${this.root}.`);

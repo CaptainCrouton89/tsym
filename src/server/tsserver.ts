@@ -61,8 +61,10 @@ export class TsServerSession {
     const body = JSON.stringify({ seq, type: 'request', command, arguments: args }) + '\n';
     return new Promise<ProtocolMessage>((resolve, reject) => {
       this.pending = { seq, kind: 'response', resolve, reject };
-      this.onCommand(command);
-      this.child!.stdin.write(body, (error) => { if (error) this.fail(error); });
+      try {
+        this.onCommand(command);
+        this.child!.stdin.write(body, (error) => { if (error) this.fail(error); });
+      } catch (error) { this.fail(asError(error)); }
     });
   }
 
@@ -78,8 +80,10 @@ export class TsServerSession {
     const body = JSON.stringify({ seq, type: 'request', command: 'geterrForProject', arguments: { file, delay } }) + '\n';
     return new Promise<DiagnosticEvent[]>((resolve, reject) => {
       this.pending = { seq, kind: 'completion', collected: [], resolve, reject };
-      this.onCommand('geterrForProject');
-      this.child!.stdin.write(body, (error) => { if (error) this.fail(error); });
+      try {
+        this.onCommand('geterrForProject');
+        this.child!.stdin.write(body, (error) => { if (error) this.fail(error); });
+      } catch (error) { this.fail(asError(error)); }
     });
   }
 
@@ -164,6 +168,8 @@ export class TsServerSession {
 }
 
 export class TsServerError extends Error { constructor(readonly command: string, message: string) { super(message); } }
+
+function asError(value: unknown): Error { return value instanceof Error ? value : new Error(String(value)); }
 
 export function resolveTsserver(root: string): TsServerLocation {
   const workspace = path.join(root, 'node_modules', 'typescript', 'lib', 'tsserver.js');

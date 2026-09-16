@@ -44,19 +44,27 @@ async function send(root: string, operation: 'invoke' | 'status' | 'stop', invoc
   if (ensureServer) {
     const ensured = await ensure(root);
     if ('category' in ensured) return ensured;
-  }
-  try {
-    return await exchange(paths, request(root, operation, invocation));
-  } catch (error) {
-    if (error instanceof DeadlineExpired) return deadlineFailure(paths, error);
-    if (error instanceof Stopping) return stoppingFailure(paths);
-    if (!ensureServer || !(error instanceof SessionDied)) return unavailable(paths, error);
+    try {
+      return withStartup(await exchange(paths, request(root, operation, invocation)), ensured.startupMs);
+    } catch (error) {
+      if (error instanceof DeadlineExpired) return deadlineFailure(paths, error);
+      if (error instanceof Stopping) return stoppingFailure(paths);
+      if (!(error instanceof SessionDied)) return unavailable(paths, error);
+    }
+  } else {
+    try {
+      return await exchange(paths, request(root, operation, invocation));
+    } catch (error) {
+      if (error instanceof DeadlineExpired) return deadlineFailure(paths, error);
+      if (error instanceof Stopping) return stoppingFailure(paths);
+      return unavailable(paths, error);
+    }
   }
 
   const ensured = await ensure(root, true);
   if ('category' in ensured) return ensured;
   try {
-    return await exchange(paths, request(root, operation, invocation));
+    return withStartup(await exchange(paths, request(root, operation, invocation)), ensured.startupMs);
   } catch (error) {
     if (error instanceof DeadlineExpired) return deadlineFailure(paths, error);
     if (error instanceof Stopping) return stoppingFailure(paths);
@@ -65,16 +73,17 @@ async function send(root: string, operation: 'invoke' | 'status' | 'stop', invoc
   }
 }
 
-async function ensure(root: string, force = false): Promise<Completion> {
+async function ensure(root: string, force = false): Promise<Completion & { startupMs?: number }> {
   const paths = pathsForRoot(root);
   if (!force && existsSync(paths.port)) {
     try { return await exchange(paths, request(root, 'status')); } catch { /* a lock holder will clean stale endpoint */ }
   }
+  const startedAt = performance.now();
   spawn(process.execPath, [fileURLToPath(new URL('../../dist/server/main.js', import.meta.url)), '--root', root], { detached: true, stdio: 'ignore' }).unref();
-  const deadline = performance.now() + 30_000;
+  const deadline = startedAt + 30_000;
   while (performance.now() < deadline) {
     if (existsSync(paths.port)) {
-      try { return await exchange(paths, request(root, 'status')); } catch { /* wait for the winning candidate */ }
+      try { return withStartup(await exchange(paths, request(root, 'status')), performance.now() - startedAt); } catch { /* wait for the winning candidate */ }
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -126,6 +135,10 @@ function exchange(paths: ServerPaths, payload: ReturnType<typeof request>): Prom
     socket.on('error', (error) => fail(stopping ? new Stopping(error.message) : new SessionDied(error.message)));
     socket.on('close', () => { if (!settled) fail(stopping ? new Stopping('resident stopped before responding') : new SessionDied('resident closed before responding')); });
   });
+}
+
+function withStartup(completion: Completion, startupMs: number | undefined): Completion & { startupMs?: number } {
+  return startupMs === undefined || 'category' in completion ? completion : { ...completion, startupMs: Math.round(startupMs) };
 }
 
 function deadlineFailure(paths: ServerPaths, deadline: DeadlineExpired): ToolError {
