@@ -72,7 +72,7 @@ test('inspect follows both interface implementations and reports one dispatch si
     assert.match(external.stdout, /unresolved_external/);
     const nested = run('inspect', 'nestedArrowTarget', '--only', 'callers', '--each', '0');
     assert.equal(nested.status, 0);
-    assert.match(nested.stdout, /VariableDeclaration  nestedArrow/);
+    assert.match(nested.stdout, /const  nestedArrow/);
     const module = run('inspect', 'run', '--only', 'callers', '--each', '0');
     assert.match(module.stdout, /src\/main\.ts:0:0/);
 

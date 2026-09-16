@@ -1,5 +1,6 @@
 import type { DeclarationRecord } from '../../core/declarations.js';
 import { matchesPathFilters } from '../../core/receipt.js';
+import { normalKind } from '../../read/read.js';
 import { mergeGraphs } from '../../relations/graph.js';
 import { implementations, traverse } from '../../relations/engine.js';
 import { renderGraph } from '../../relations/mermaid.js';
@@ -45,7 +46,7 @@ const handler: SemanticHandler = async (context, invocation) => {
           receiptParts.push(`${result.rows.length} ${relation}${result.excluded ? `, ${result.excluded} excluded` : ''}${result.unresolved ? `, ${result.unresolved} unresolved` : ''}${result.dispatch ? `, ${result.dispatch} dispatch` : ''}`);
         }
       }
-      blocks.push({ element: 'inspect', attributes: { symbol: seed.address, name: seed.name, kind: seed.kind, depth }, text: header, children: relations });
+      blocks.push({ element: 'inspect', attributes: { symbol: seed.address, name: seed.name, kind: normalKind(seed.kind), depth }, text: header, children: relations });
     }
     const capped = selected.some((relation) => relation === 'refs' || relation === 'impl' || relation === 'calls' || relation === 'callers') && each > 0;
     const rerun = capped ? `; re-run tsym inspect ${invocation.input.args.join(' ')} --only ${selected[0]} --each 0 for all rows` : '';
@@ -83,7 +84,7 @@ async function references(context: Parameters<SemanticHandler>[0], record: Decla
     if (!matchesPathFilters(displayPath, filters)) continue;
     const owner = context.source.ownerForSpan(ref.file, ref.start);
     const qualifiedName = owner?.containerName ? `${owner.containerName}.${owner.name}` : owner?.name ?? pathName(displayPath);
-    const kind = owner?.kind ?? 'module';
+    const kind = normalKind(owner?.kind ?? 'module');
     const role = roleAt(context, ref.file, ref.start.line, ref.start.offset, ref.isDefinition === true, ref.isWriteAccess === true);
     rows.set(`${displayPath}:${ref.start.line}:${ref.start.offset}`, { path: displayPath, line: ref.start.line, col: ref.start.offset, kind, qualifiedName, role });
   }
@@ -93,18 +94,18 @@ async function references(context: Parameters<SemanticHandler>[0], record: Decla
 function relationBlock<T>(element: string, rows: readonly T[], path: (row: T) => string, each: number, format: (row: T) => string): OutputNode {
   if (!rows.length) return { element, attributes: { count: 0 } };
   const shown = shownRows(rows, each);
-  return { element, attributes: { count: rows.length, files: new Set(rows.map(path)).size, shown: shown.length }, text: shown.map(format).join('\n') };
+  return { element, attributes: { count: rows.length, files: new Set(rows.map(path)).size, shown: shown.length < rows.length ? shown.length : undefined }, text: shown.map(format).join('\n') };
 }
 function refBlock(rows: ReferenceRow[], each: number): OutputNode {
   return relationBlock('refs', rows, (row) => row.path, each, (row) => `${row.path}:${row.line}:${row.col}  ${row.kind}  ${row.qualifiedName}  ${row.role}`);
 }
 function implBlock(rows: DeclarationRecord[], each: number): OutputNode {
-  return relationBlock('impl', rows, (row) => row.location.path, each, (row) => `${row.address}  ${row.kind}  ${row.qualifiedName}`);
+  return relationBlock('impl', rows, (row) => row.location.path, each, (row) => `${row.address}  ${normalKind(row.kind)}  ${row.qualifiedName}`);
 }
 function traversalBlock(relation: 'callers' | 'calls', result: TraversalResult, each: number): OutputNode {
   return relationBlock(relation, result.rows, (row) => row.path, each, formatTraversal);
 }
-function formatTraversal(row: RelationRow): string { return `${row.id}  ${row.depth}  ${row.kind}  ${row.qualifiedName}  (${row.callSites} ${row.callSites === 1 ? 'site' : 'sites'}${row.edgeKinds.includes('impl') ? ', impl' : ''})`; }
+function formatTraversal(row: RelationRow): string { return `${row.id}  ${row.depth}  ${normalKind(row.kind)}  ${row.qualifiedName}  (${row.callSites} ${row.callSites === 1 ? 'site' : 'sites'}${row.edgeKinds.includes('impl') ? ', impl' : ''})`; }
 function shownRows<T>(rows: readonly T[], each: number): readonly T[] { return each === 0 ? rows : rows.slice(0, each); }
 function selectedRelations(value: boolean | number | string | string[] | undefined): readonly Relation[] { const values = Array.isArray(value) ? value : relationOrder; return relationOrder.filter((relation) => values.includes(relation)); }
 function strings(value: boolean | number | string | string[] | undefined): string[] { return Array.isArray(value) ? value : value === undefined ? [] : [String(value)]; }

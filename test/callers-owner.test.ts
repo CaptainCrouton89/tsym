@@ -22,16 +22,16 @@ test('inspect attributes private and module-scope callback callers to their synt
 
     const refs = run('inspect', 'callerOwnerTarget', '--only', 'refs', '--each', '0');
     assert.equal(refs.status, 0, `${refs.stdout}\n${refs.stderr}`);
-    assert.match(refs.stdout, /MethodDeclaration  CallerOwner\.#privateCaller  call/);
+    assert.match(refs.stdout, /method  CallerOwner\.#privateCaller  call/);
     assert.match(refs.stdout, /module  callers-owner\.fixture\.ts  call/);
 
     const fieldCallers = run('inspect', 'fieldOwnerTarget', '--only', 'callers', '--each', '0');
     assert.equal(fieldCallers.status, 0, `${fieldCallers.stdout}\n${fieldCallers.stderr}`);
-    assert.match(fieldCallers.stdout, /PropertyDeclaration  FieldOwner\.handler  \(1 site\)/);
+    assert.match(fieldCallers.stdout, /property  FieldOwner\.handler  \(1 site\)/);
 
     const fieldFunctionCallers = run('inspect', 'fieldFunctionOwnerTarget', '--only', 'callers', '--each', '0');
     assert.equal(fieldFunctionCallers.status, 0, `${fieldFunctionCallers.stdout}\n${fieldFunctionCallers.stderr}`);
-    assert.match(fieldFunctionCallers.stdout, /PropertyDeclaration  FieldFunctionOwner\.handler  \(1 site\)/);
+    assert.match(fieldFunctionCallers.stdout, /property  FieldFunctionOwner\.handler  \(1 site\)/);
 
     const fieldCalls = run('inspect', 'src/callers-owner.fixture.ts:12:3', '--only', 'calls', '--each', '0');
     assert.equal(fieldCalls.status, 0, `${fieldCalls.stdout}\n${fieldCalls.stderr}`);
@@ -39,7 +39,7 @@ test('inspect attributes private and module-scope callback callers to their synt
 
     const fieldRefs = run('inspect', 'fieldOwnerTarget', '--only', 'refs', '--each', '0');
     assert.equal(fieldRefs.status, 0, `${fieldRefs.stdout}\n${fieldRefs.stderr}`);
-    assert.match(fieldRefs.stdout, /PropertyDeclaration  FieldOwner\.handler  call/);
+    assert.match(fieldRefs.stdout, /property  FieldOwner\.handler  call/);
   } finally {
     run('server', 'stop');
     rmSync(root, { recursive: true, force: true });

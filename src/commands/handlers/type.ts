@@ -1,4 +1,5 @@
 import { DeclarationError, type DeclarationRecord } from '../../core/declarations.js';
+import { normalKind } from '../../read/read.js';
 import type { SemanticHandler } from '../handlers.js';
 import type { ToolError } from '../types.js';
 
@@ -59,7 +60,7 @@ function renderSymbol(declaration: DeclarationRecord, quickinfo: QuickInfo | nul
   const attributes = {
     at: declaration.address,
     name: declaration.name,
-    kind: quickinfo?.kind ?? declaration.kind,
+    kind: normalKind(quickinfo?.kind ?? declaration.kind),
     modifiers: quickinfo?.kindModifiers || undefined,
     typeAt: definitions.length > 0 ? definitions.join(' ') : undefined,
   };

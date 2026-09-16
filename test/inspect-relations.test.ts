@@ -19,7 +19,7 @@ test('inspect owns calls in function expression contexts and excludes concrete d
     ]) {
       const result = run('inspect', owner, '--only', 'calls', '--each', '0');
       assert.equal(result.status, 0, `${owner}: ${result.stdout}\n${result.stderr}`);
-      assert.match(result.stdout, new RegExp(`<calls count="${count}" files="1" shown="${count}">`));
+      assert.match(result.stdout, new RegExp(`<calls count="${count}" files="1">`));
       assert.match(result.stdout, new RegExp(callee));
     }
 
@@ -29,7 +29,7 @@ test('inspect owns calls in function expression contexts and excludes concrete d
 
     const contract = run('inspect', 'Sink', '--only', 'impl', '--each', '0');
     assert.equal(contract.status, 0, `${contract.stdout}\n${contract.stderr}`);
-    assert.match(contract.stdout, /<impl count="2" files="1" shown="2">/);
+    assert.match(contract.stdout, /<impl count="2" files="1">/);
     assert.match(contract.stdout, /FirstSink/);
     assert.match(contract.stdout, /SecondSink/);
   } finally {

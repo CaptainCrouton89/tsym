@@ -83,7 +83,7 @@ test('check reports file diagnostics, filters before the limit, and clean files 
 
     const inspectAfterProjectCheck = run('inspect', 'shout', '--only', 'calls', '--each', '0');
     assert.equal(inspectAfterProjectCheck.status, 0);
-    assert.match(inspectAfterProjectCheck.stdout, /<calls count="1" files="1" shown="1">/);
+    assert.match(inspectAfterProjectCheck.stdout, /<calls count="1" files="1">/);
 
     const outsideProgram = run('check', 'README.md');
     assert.equal(outsideProgram.status, 2);

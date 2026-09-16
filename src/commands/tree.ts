@@ -136,11 +136,11 @@ function parseArgs(tokens: readonly string[], node: CommandDeclaration): { input
       }
       const raw = inline ?? tokens[++index];
       if (raw === undefined) { problems.push({ field: name, received: token, expected: `${declaration.type} value`, next: helpNext(node) }); continue; }
-      const value = parseValue(raw, declaration, problems, node);
-      if (value === undefined) continue;
-      if (declaration.repeat) values[name] = [...((values[name] as string[] | undefined) ?? []), String(value)];
+      const parsed = repeatValues(raw, declaration, problems, node);
+      if (parsed.length === 0) continue;
+      if (declaration.repeat) values[name] = [...((values[name] as string[] | undefined) ?? []), ...parsed.map(String)];
       else if (duplicated) problems.push({ field: name, received: raw, expected: 'one value; this flag is not repeatable', next: helpNext(node) });
-      else values[name] = value;
+      else values[name] = parsed[0]!;
     } else args.push(token);
   }
   const argument = node.argument;
@@ -150,6 +150,11 @@ function parseArgs(tokens: readonly string[], node: CommandDeclaration): { input
     if (node.name === 'rename' && args.length !== 2) problems.push({ field: '<symbol> <newName>', received: args.join(' ') || 'none', expected: 'exactly two values', next: helpNext(node) });
   } else if (args.length > 0) problems.push({ field: 'arguments', received: args.join(' '), expected: 'no positional arguments', next: helpNext(node) });
   return { input: { args, flags: values, explicit }, problems };
+}
+
+function repeatValues(raw: string, declaration: FlagDeclaration, problems: ValidationProblem[], node: CommandDeclaration): Array<boolean | number | string> {
+  const values = declaration.repeat && declaration.type === 'string' && declaration.values ? raw.split(',') : [raw];
+  return values.map((value) => parseValue(value, declaration, problems, node)).filter((value): value is boolean | number | string => value !== undefined);
 }
 
 function parseValue(raw: string, declaration: FlagDeclaration, problems: ValidationProblem[], node: CommandDeclaration): boolean | number | string | undefined {
