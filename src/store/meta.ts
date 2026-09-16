@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as ts from 'ts5';
 import { STORE_SCHEMA_VERSION } from './schema.js';
 import type { ConfiguredProjects } from '../ts7/projects.js';
@@ -14,6 +15,7 @@ export interface IndexedFileMeta {
 export interface StoreMetadata {
   schemaVersion: number;
   tsVersion: string;
+  tsymBuild: string;
   indexedCommit: string;
   configSet: string[];
   configHashes: Record<string, string>;
@@ -54,6 +56,7 @@ export function metadataFor(root: string, projects: ConfiguredProjects, indexedC
   return {
     schemaVersion: STORE_SCHEMA_VERSION,
     tsVersion,
+    tsymBuild: hashTsymBuild(),
     indexedCommit,
     configSet: configs.map((file) => relative(root, file)),
     configHashes: Object.fromEntries(shapeConfigs.map((file) => [relative(root, file), hashFile(file)])),
@@ -109,6 +112,25 @@ function resolveExtends(config: string, extend: string): string | undefined {
 
 function bundledTsVersion(): string {
   return createRequire(import.meta.url)('typescript/package.json').version as string;
+}
+
+export function hashTsymBuild(dist = path.resolve(fileURLToPath(new URL('../../dist/', import.meta.url)))): string {
+  const files: string[] = [];
+  const visit = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(file);
+      else if (entry.isFile() && entry.name.endsWith('.js')) files.push(file);
+    }
+  };
+  visit(dist);
+  const hash = createHash('sha256');
+  for (const file of files.sort()) {
+    const content = readFileSync(file);
+    hash.update(`${path.relative(dist, file).split(path.sep).join('/')}\0${content.byteLength}\0`);
+    hash.update(content);
+  }
+  return hash.digest('hex');
 }
 
 function relative(root: string, file: string): string {

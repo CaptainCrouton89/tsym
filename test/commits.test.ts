@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { ingestCommits } from '../src/index/commits.js';
 import { describeFile } from '../src/index/descriptor.js';
 import { type DeclarationRow, loadGraph, replaceFiles } from '../src/store/load.js';
-import { canReuse, hasSourceDrift, metadataFor } from '../src/store/meta.js';
+import { canReuse, hasSourceDrift, hashTsymBuild, metadataFor } from '../src/store/meta.js';
 import { query } from '../src/store/query.js';
 import { Store } from '../src/store/store.js';
 import { ConfiguredProjects } from '../src/ts7/projects.js';
@@ -247,6 +247,21 @@ test('a linked worktree refreshes for its nested current branch and ignores anot
   }
 });
 
+test('tsym build hash changes with emitted JavaScript content and paths', () => {
+  const dist = mkdtempSync(path.join(tmpdir(), 'tsym-dist-'));
+  try {
+    const first = path.join(dist, 'first.js');
+    writeFileSync(first, 'export const value = 1;\n');
+    const initial = hashTsymBuild(dist);
+    writeFileSync(first, 'export const value = 2;\n');
+    const changed = hashTsymBuild(dist);
+    assert.notEqual(changed, initial, 'content');
+    rmSync(first);
+    writeFileSync(path.join(dist, 'second.js'), 'export const value = 2;\n');
+    assert.notEqual(hashTsymBuild(dist), changed, 'path');
+  } finally { rmSync(dist, { recursive: true, force: true }); }
+});
+
 test('source drift reuses the graph shape and requests a refresh', () => {
   const subject = fixture('export function source() {}\n');
   const program = new Ts7Host(subject.root);
@@ -255,6 +270,7 @@ test('source drift reuses the graph shape and requests a refresh', () => {
     subject.commit('initial');
     projects.load();
     const before = metadataFor(subject.root, projects, git(subject.root, ['rev-parse', 'HEAD']).trim());
+    assert.equal(canReuse({ ...before, tsymBuild: 'different-build' }, before), false, 'tsym build');
     subject.write('export function source() { return; }\n');
     const after = metadataFor(subject.root, projects, before.indexedCommit);
     assert.equal(canReuse(before, after), true);
