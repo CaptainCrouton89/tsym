@@ -1,0 +1,80 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdtempSync, rmSync, watch } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+
+function setup() {
+  const temp = mkdtempSync(path.join(tmpdir(), 'symbols-type-check-'));
+  const root = path.join(temp, 'fixture');
+  const cache = path.join(temp, 'cache');
+  cpSync('test/fixture', root, { recursive: true });
+  const run = (...args: string[]) => spawnSync(process.execPath, ['dist/cli.js', '--root', root, ...args], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } });
+  return { temp, run };
+}
+
+async function close(temp: string, run: (...args: string[]) => ReturnType<typeof spawnSync>): Promise<void> {
+  const status = run('server', 'status');
+  const port = /port="([^"]+)"/.exec(status.stdout)?.[1];
+  if (port) {
+    const removed = endpointRemoved(port);
+    assert.equal(run('server', 'stop').status, 0);
+    await removed;
+  }
+  rmSync(temp, { recursive: true, force: true });
+}
+
+test('type preserves quickinfo, documentation, tags, and a type declaration address', async () => {
+  const { temp, run } = setup();
+  try {
+    const result = run('type', 'documentedType', '--def');
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /at="src\/type-doc.ts:6:17" name="documentedType" kind="function" modifiers="export" typeAt="src\/type-doc.ts:6:17"/);
+    assert.match(result.stdout, /function documentedType\(value: string\): string/);
+    assert.match(result.stdout, /<doc>\nReturns the input after recording why the caller supplied it\./);
+    assert.match(result.stdout, /<tag name="param">\nvalue Text to return\./);
+
+    const usage = run('type', 'src/app.ts:1:10');
+    assert.equal(usage.status, 0);
+    assert.match(usage.stdout, /at="src\/greet.ts:2:17" name="greet"/);
+  } finally {
+    await close(temp, run);
+  }
+});
+
+test('check reports file diagnostics, filters before the limit, and clean files exit one', async () => {
+  const { temp, run } = setup();
+  try {
+    const diagnostic = run('check', 'src/check-diagnostics.ts', '--errors-only');
+    assert.equal(diagnostic.status, 0);
+    assert.match(diagnostic.stdout, /<diagnostic at="src\/check-diagnostics.ts:1:14" severity="error" code="2322">\nType &apos;number&apos; is not assignable to type &apos;string&apos;\./);
+
+    const capped = run('check', 'src/check-diagnostics.ts', '--limit', '0');
+    assert.equal(capped.status, 1);
+    assert.match(capped.stdout, /errors="0" warnings="0"/);
+
+    const clean = run('check', 'src/greet.ts');
+    assert.equal(clean.status, 1);
+    assert.match(clean.stdout, /<check scope="src\/greet.ts" errors="0" warnings="0"/);
+
+    const typeFlag = run('type', 'greet', '--errors-only');
+    assert.equal(typeFlag.status, 2);
+    assert.match(typeFlag.stderr, /--errors-only/);
+    const checkFlag = run('check', 'src/greet.ts', '--def');
+    assert.equal(checkFlag.status, 2);
+    assert.match(checkFlag.stderr, /--def/);
+  } finally {
+    await close(temp, run);
+  }
+});
+
+function endpointRemoved(port: string): Promise<void> {
+  if (!existsSync(port)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const watcher = watch(path.dirname(port), () => {
+      if (!existsSync(port)) { watcher.close(); resolve(); }
+    });
+    setTimeout(() => { watcher.close(); reject(new Error('resident did not remove its endpoint')); }, 5_000).unref();
+  });
+}
