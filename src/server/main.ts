@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { createServer, type Socket } from 'node:net';
-import { appendFileSync, chmodSync, openSync, readdirSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, openSync, readdirSync } from 'node:fs';
 import { discoverRoot, ensureStateDirectory, idleSeconds, pathsForRoot, publishState, removeEndpoint, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, WIRE_VERSION, type WireFrame, type WireRequest, writeFrame } from './wire.js';
 import { createSemanticContext } from './context.js';
@@ -307,6 +307,11 @@ async function main(): Promise<void> {
   };
 
   const refresh = async (batch: WatchBatch): Promise<void> => {
+    if (!existsSync(root)) {
+      append(paths, `workspace root disappeared; stopping resident root=${root}`);
+      retire();
+      return;
+    }
     if (!store || !index) throw new Error('The index refresh ran before startup completed.');
     await index.rebuild(async () => {
       if (!semantic) throw new Error('The index refresh ran before TypeScript initialized.');
