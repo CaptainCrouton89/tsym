@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync }
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 
-export interface ServerPaths { root: string; state: string; lock: string; port: string; pid: string; log: string; }
+export interface ServerPaths { root: string; state: string; lock: string; port: string; pid: string; log: string; store: string; results: string; }
 export interface PublishedState { root: string; pid: number; bootedAt: string; port: string; log: string; idleDeadline: string; state: 'ready' | 'stopping'; }
 
 export function discoverRoot(input: string | undefined, cwd = process.cwd()): string {
@@ -24,12 +24,16 @@ export function pathsForRoot(root: string): ServerPaths {
   const stateBase = process.env.XDG_CACHE_HOME ?? path.join(process.env.HOME ?? '~', '.cache');
   const id = createHash('sha256').update(root).digest('hex').slice(0, 16);
   const state = path.join(stateBase, 'tsym', id);
-  return { root, state, lock: path.join(state, 'lock'), port: path.join(state, 'port'), pid: path.join(state, 'pid'), log: path.join(state, 'log') };
+  return { root, state, lock: path.join(state, 'lock'), port: path.join(state, 'port'), pid: path.join(state, 'pid'), log: path.join(state, 'log'), store: path.join(state, 'store'), results: path.join(state, 'results') };
 }
 
 export function ensureStateDirectory(paths: ServerPaths): void {
   mkdirSync(paths.state, { recursive: true, mode: 0o700 });
   chmodSync(paths.state, 0o700);
+  for (const directory of [paths.store, paths.results]) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    chmodSync(directory, 0o700);
+  }
 }
 
 export function readState(paths: ServerPaths): PublishedState | null {
