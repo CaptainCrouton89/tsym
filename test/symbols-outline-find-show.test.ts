@@ -76,6 +76,7 @@ test('outline, find, and show use the resident compiler without opening outline 
     const globFromSubdirectory = runFrom(path.join(root, 'src'), root, cache, 'outline', 'gre*.ts');
     assert.equal(globFromSubdirectory.status, 0, globFromSubdirectory.stderr);
     assert.match(globFromSubdirectory.stdout, /<outline path="gre\*\.ts" depth="1" symbols="6" files="1">/);
+    assert.deepEqual(rows(globFromSubdirectory.stdout), rows(fromSubdirectory.stdout), 'a glob operand lists the matched files\' declarations, not a directory container row');
 
     const outside = run(root, cache, 'outline', 'missing.ts');
     assert.equal(outside.status, 2);

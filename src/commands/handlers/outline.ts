@@ -14,7 +14,7 @@ const handler: SemanticHandler = async (context, invocation) => {
   const directory = invocation.input.args.length === 0 ? context.root : invocation.input.args.map((input) => path.resolve(invocation.cwd, input)).find((candidate) => {
     try { return statSync(candidate).isDirectory(); } catch { return false; }
   });
-  const requestedDirectory = directory !== undefined || invocation.input.args.some((input) => /[*?[{]/.test(input));
+  const requestedDirectory = directory !== undefined;
   const files: FileSymbols[] = [];
   const explicitFiles = new Set(invocation.input.args.map((input) => path.resolve(invocation.cwd, input)).filter((input) => {
     try { return statSync(input).isFile(); } catch { return false; }
