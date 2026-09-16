@@ -28,10 +28,14 @@ test('outline, find, and show use the resident compiler without opening outline 
     assert.equal(directory.status, 0);
     assert.match(directory.stdout, /src\/greet\.ts  \(1 file, 6 symbols\)/);
     assert.doesNotMatch(directory.stdout, /src\/greet\.ts:2:17/);
+    const deeper = run(root, cache, 'outline', 'src', '--depth', '3');
+    assert.match(deeper.stdout, /Greeter\.say/);
 
     const found = run(root, cache, 'find', 'greet');
     assert.equal(found.status, 0);
     assert.match(found.stdout, /src\/greet\.ts:2:17  function  export  greet/);
+    const reexport = run(root, cache, 'find', 'hello');
+    assert.match(reexport.stdout, /alias  export  hello/);
     const missed = run(root, cache, 'find', 'doesNotExist');
     assert.equal(missed.status, 1);
     assert.match(missed.stdout, /<find name="doesNotExist" count="0"\/>/);

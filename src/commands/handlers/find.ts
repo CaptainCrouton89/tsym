@@ -20,7 +20,8 @@ const handler: SemanticHandler = async (context, invocation) => {
     const relative = displayPath(context.root, candidate.file);
     if ((kinds && !kinds.includes(kind)) || !matchesPathFilters(relative, { in: flags['--in'] as string[] | undefined, exclude: flags['--exclude'] as string[] | undefined })) continue;
     const declaration = await context.resolver.fromFileSpan(candidate);
-    rows.set(declaration.address, { address: declaration.address, path: relative, kind, exported: candidate.kindModifiers.split(/[\s,]+/).includes('export'), qualifiedName: declaration.qualifiedName });
+    const sourceLine = context.source.read(candidate.file).split('\n')[candidate.start.line - 1] ?? '';
+    rows.set(declaration.address, { address: declaration.address, path: relative, kind, exported: candidate.kindModifiers.split(/[\s,]+/).includes('export') || /\bexport\b/.test(sourceLine), qualifiedName: declaration.qualifiedName });
   }
   const limit = flags['--limit'] as number | undefined;
   const sorted = [...rows.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || numericAddress(a.address, b.address));

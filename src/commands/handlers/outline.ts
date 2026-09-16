@@ -32,10 +32,10 @@ const handler: SemanticHandler = async (context, invocation) => {
   }
   const rows = requestedDirectory && depth === 1
     ? containers(context.root, files, flags, directory ?? context.root)
-    : symbols(files, flags, requestedDirectory ? 1 : depth);
+    : symbols(files, flags, requestedDirectory ? depth - 1 : depth);
   const limit = flags['--limit'] as number | undefined;
   const shown = limit === undefined ? rows : rows.slice(0, limit);
-  const symbolsCount = files.flatMap((file) => select(file.symbols, flags, requestedDirectory ? 1 : depth, flags['--members'] === true)).length;
+  const symbolsCount = files.flatMap((file) => select(file.symbols, flags, requestedDirectory ? depth - 1 : depth, flags['--members'] === true)).length;
   const receipt = `${shown.length} outline row${shown.length === 1 ? '' : 's'}${limit !== undefined && rows.length > shown.length ? `, limit ${limit}` : ''}${scope.notInProgram > 0 ? `, ${scope.notInProgram} not in program` : ''}, ${Math.round(performance.now() - started)} ms`;
   return { element: 'outline', attributes: { path: invocation.input.args.join(' ') || '.', depth, symbols: symbolsCount, files: files.length }, body: shown.map((row) => row.text).join('\n'), count: shown.length, receipt };
 };
@@ -61,11 +61,11 @@ function containers(root: string, files: FileSymbols[], flags: Record<string, bo
   for (const file of files) {
     const relative = path.relative(directory, file.file).split(path.sep).join('/');
     const parts = relative.split('/');
-    const key = parts.length === 1 ? file.symbols[0]?.path ?? path.relative(root, file.file).split(path.sep).join('/') : `${parts[0]}/`;
+    const key = parts.length === 1 ? file.symbols[0]?.path ?? path.relative(root, file.file).split(path.sep).join('/') : `${path.relative(root, path.join(directory, parts[0]!)).split(path.sep).join('/')}/`; 
     grouped.set(key, [...(grouped.get(key) ?? []), file]);
   }
   return [...grouped.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, group]) => {
-    const count = group.flatMap((file) => select(file.symbols, flags, 1, false)).length;
+    const count = group.flatMap((file) => select(file.symbols, flags, 1, flags['--members'] === true)).length;
     return { text: `${name}  (${group.length} ${group.length === 1 ? 'file' : 'files'}, ${count} symbols)` };
   });
 }
