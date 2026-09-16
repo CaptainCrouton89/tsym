@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { escapeText, xml } from '../../output.js';
 import { DeclarationError, type DeclarationRecord } from '../../core/declarations.js';
 import { declarationSpans, declarationText, lineCount, navto, navtree, normalKind, symbolAt, type Span } from '../../read/read.js';
 import type { SemanticContext } from '../../server/context.js';
@@ -14,17 +13,17 @@ const handler: SemanticHandler = async (context, invocation) => {
     validateAddress(context, input);
     resolved.push(await resolve(context, input));
   }
-  const rendered: string[] = [];
+  const rendered: Array<{ element: string; attributes: Record<string, string | number>; text: string }> = []; 
   for (const declaration of resolved) {
     const source = context.source.read(declaration.file);
     const declarationSpans = declaration.location.line === 0 ? [] : await spans(context, declaration);
     const text = declaration.location.line === 0 ? source : declarationSpans.map((span) => declarationText(source, span, normalKind(declaration.kind))).join('\n');
     const lines = declaration.location.line === 0 ? source.split('\n').length - (source.endsWith('\n') ? 1 : 0) : declarationSpans.reduce((total, span) => total + lineCount(source, span), 0);
-    rendered.push(xml('symbol', { at: declaration.address, name: declaration.name, kind: normalKind(declaration.kind), lines }, escapeText(text)));
+    rendered.push({ element: 'symbol', attributes: { at: declaration.address, name: declaration.name, kind: normalKind(declaration.kind), lines }, text });
   }
   const limit = invocation.input.flags['--limit'] as number | undefined;
   const shown = limit === undefined ? rendered : rendered.slice(0, limit);
-  return { element: 'show', attributes: { count: shown.length }, body: shown.join('\n'), count: shown.length, receipt: `${shown.length} show declaration${shown.length === 1 ? '' : 's'}${limit !== undefined && rendered.length > shown.length ? `, limit ${limit}` : ''}, ${Math.round(performance.now() - started)} ms` };
+  return { data: { element: 'show', attributes: { count: shown.length }, children: shown }, count: shown.length, receipt: `${shown.length} show declaration${shown.length === 1 ? '' : 's'}${limit !== undefined && rendered.length > shown.length ? `, limit ${limit}` : ''}, ${Math.round(performance.now() - started)} ms` };
 };
 
 async function spans(context: SemanticContext, declaration: DeclarationRecord): Promise<Span[]> {

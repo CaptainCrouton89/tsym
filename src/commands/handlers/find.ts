@@ -1,4 +1,3 @@
-import { escapeText } from '../../output.js';
 import { displayPath, navto, navtree, normalKind, readSymbols, type ReadSymbol } from '../../read/read.js';
 import { matchesPathFilters } from '../../core/receipt.js';
 import type { SemanticHandler } from '../handlers.js';
@@ -38,9 +37,7 @@ const handler: SemanticHandler = async (context, invocation) => {
   const sorted = [...rows.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || numericAddress(a.address, b.address));
   const shown = limit === undefined ? sorted : sorted.slice(0, limit);
   return {
-    element: 'find',
-    attributes: { name, count: shown.length },
-    body: shown.map((row) => `${escapeText(row.address)}  ${row.kind}${row.exported ? '  export' : ''}  ${escapeText(row.qualifiedName)}`).join('\n'),
+    data: { element: 'find', attributes: { name, count: shown.length }, text: shown.map((row) => `${row.address}  ${row.kind}${row.exported ? '  export' : ''}  ${row.qualifiedName}`).join('\n') },
     count: shown.length,
     receipt: `${shown.length} find row${shown.length === 1 ? '' : 's'}${limit !== undefined && sorted.length > shown.length ? `, limit ${limit}` : ''}, ${Math.round(performance.now() - started)} ms`,
   };

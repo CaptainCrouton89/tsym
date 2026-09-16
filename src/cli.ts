@@ -3,14 +3,16 @@ import { localSearch } from './commands/handlers/search.js';
 import { applyRenamePlan, type RenameAnswer } from './commands/rename-apply.js';
 import { parseInvocation } from './commands/tree.js';
 import type { Answer, Completion, Invocation } from './commands/types.js';
-import { renderCompletion } from './output.js';
+import { renderCompletion, renderNode } from './output.js';
 import { invokeResident, serverReload, serverStatus, serverStop } from './server/client.js';
 
 async function main(argv: string[]): Promise<number> {
   const parsed = parseInvocation(argv);
   if ('help' in parsed) {
     const state = parsed.help.name === 'search' ? '' : await helpState(rootFlag(argv));
-    return emit({ element: 'command', raw: renderHelp(parsed.help, state), count: 1 }, false);
+    process.stdout.write(renderHelp(parsed.help, state) + '\n');
+    process.stderr.write('1 answer, 0 ms\n');
+    return 0;
   }
   if ('category' in parsed) return emit(parsed, false);
   return emit(await dispatch(parsed), parsed.json);
@@ -32,7 +34,9 @@ async function applyRename(invocation: Invocation): Promise<Completion> {
   if (invocation.input.flags['--apply'] !== true || !isRenameAnswer(completion)) return completion;
   const applied = await applyRenamePlan(completion.renamePlan);
   if ('category' in applied) return applied;
-  return { ...completion, attributes: { ...completion.attributes, applied: true } };
+  const data = Array.isArray(completion.data) ? completion.data : [completion.data];
+  const [rename, ...rest] = data;
+  return { ...completion, data: [{ ...rename!, attributes: { ...rename!.attributes, applied: true } }, ...rest] };
 }
 
 function isRenameAnswer(completion: Completion): completion is Answer & RenameAnswer { return !('category' in completion) && 'renamePlan' in completion; }
@@ -40,9 +44,9 @@ function isRenameAnswer(completion: Completion): completion is Answer & RenameAn
 async function helpState(root: string | undefined): Promise<string> {
   const status = await serverStatus(root);
   if ('category' in status) return '<server state="unavailable"/>';
-  const attributes = status.attributes ?? {};
+  const attributes = (Array.isArray(status.data) ? status.data[0]! : status.data).attributes ?? {};
   if (attributes.state === 'stopped') return '<server state="stopped"/>';
-  return `<server ${Object.entries(attributes).map(([key, value]) => `${key}="${String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;')}"`).join(' ')}/>`;
+  return renderNode({ element: 'server', attributes });
 }
 
 function rootFlag(argv: readonly string[]): string | undefined {

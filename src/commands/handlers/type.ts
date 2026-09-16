@@ -1,4 +1,3 @@
-import { xml, escapeText } from '../../output.js';
 import { DeclarationError, type DeclarationRecord } from '../../core/declarations.js';
 import type { SemanticHandler } from '../handlers.js';
 import type { ToolError } from '../types.js';
@@ -22,7 +21,7 @@ const handler: SemanticHandler = async (context, invocation) => {
     const declarations: DeclarationRecord[] = [];
     for (const input of invocation.input.args) declarations.push(await context.resolver.resolve(input));
     const includeDefinition = invocation.input.flags['--def'] === true;
-    const symbols: string[] = [];
+    const symbols: Array<{ element: string; attributes: Record<string, string | undefined>; text?: string; children?: Array<{ element: string; attributes?: Record<string, string>; text: string }> }> = []; 
     let answers = 0;
 
     for (const declaration of declarations) {
@@ -36,7 +35,7 @@ const handler: SemanticHandler = async (context, invocation) => {
       symbols.push(renderSymbol(declaration, result.quickinfo, result.definitions));
     }
 
-    return { element: 'type', body: symbols.join('\n'), count: answers };
+    return { data: { element: 'type', children: symbols }, count: answers };
   } catch (error) {
     if (error instanceof DeclarationError) throw error;
     return failure(error);
@@ -56,7 +55,7 @@ function position(declaration: DeclarationRecord): { file: string; line: number;
   return { file: declaration.file, line: declaration.location.line, offset: declaration.location.col };
 }
 
-function renderSymbol(declaration: DeclarationRecord, quickinfo: QuickInfo | null, definitions: readonly string[]): string {
+function renderSymbol(declaration: DeclarationRecord, quickinfo: QuickInfo | null, definitions: readonly string[]) {
   const attributes = {
     at: declaration.address,
     name: declaration.name,
@@ -64,18 +63,19 @@ function renderSymbol(declaration: DeclarationRecord, quickinfo: QuickInfo | nul
     modifiers: quickinfo?.kindModifiers || undefined,
     typeAt: definitions.length > 0 ? definitions.join(' ') : undefined,
   };
-  if (quickinfo === null) return xml('symbol', attributes);
-  const body = [quickinfo.displayString ? escapeText(quickinfo.displayString) : '', documentation(quickinfo.documentation), ...tags(quickinfo.tags)].filter(Boolean).join('\n');
-  return xml('symbol', attributes, body);
+  if (quickinfo === null) return { element: 'symbol', attributes };
+  const text = quickinfo.displayString ?? '';
+  const children = [documentation(quickinfo.documentation), ...tags(quickinfo.tags)].filter((node): node is { element: string; attributes?: Record<string, string>; text: string } => node !== null);
+  return { element: 'symbol', attributes, text, children };
 }
 
-function documentation(value: QuickInfo['documentation']): string {
+function documentation(value: QuickInfo['documentation']) {
   const text = displayText(value);
-  return text ? xml('doc', {}, escapeText(text)) : '';
+  return text ? { element: 'doc', text } : null;
 }
 
-function tags(values: QuickInfo['tags']): string[] {
-  return (values ?? []).map((tag) => xml('tag', { name: tag.name ?? '' }, escapeText(displayText(tag.text))));
+function tags(values: QuickInfo['tags']) {
+  return (values ?? []).map((tag) => ({ element: 'tag', attributes: { name: tag.name ?? '' }, text: displayText(tag.text) }));
 }
 
 function displayText(value: string | readonly DisplayPart[] | undefined): string {

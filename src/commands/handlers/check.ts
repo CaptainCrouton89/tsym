@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { xml, escapeText } from '../../output.js';
 import { matchesGlob, Workspace } from '../../core/workspace.js';
 import type { DiagnosticEvent } from '../../server/tsserver.js';
 import type { SemanticHandler } from '../handlers.js';
@@ -38,11 +37,8 @@ const handler: SemanticHandler = async (context, invocation) => {
     const errors = filtered.filter((diagnostic) => diagnostic.severity === 'error').length;
     const warnings = filtered.filter((diagnostic) => diagnostic.severity === 'warning').length;
     const suggestions = filtered.filter((diagnostic) => diagnostic.severity === 'suggestion').length;
-    const body = filtered.map(renderDiagnostic).join('\n');
     return {
-      element: 'check',
-      attributes: { scope: paths.length === 0 ? 'project' : paths.join(' '), errors, warnings, suggestions, ms: Math.round(performance.now() - started) },
-      body,
+      data: { element: 'check', attributes: { scope: paths.length === 0 ? 'project' : paths.join(' '), errors, warnings, suggestions, ms: Math.round(performance.now() - started) }, children: filtered.map(renderDiagnostic) },
       count: filtered.length,
       receipt: `${filtered.length} diagnostic${filtered.length === 1 ? '' : 's'}, ${Math.round(performance.now() - started)} ms`,
     };
@@ -143,8 +139,8 @@ function finish(diagnostics: readonly Diagnostic[], invocation: Parameters<Seman
     .slice(0, limit);
 }
 
-function renderDiagnostic(diagnostic: Diagnostic): string {
-  return xml('diagnostic', { at: `${diagnostic.file}:${diagnostic.line}:${diagnostic.column}`, severity: diagnostic.severity, code: diagnostic.code }, escapeText(diagnostic.message));
+function renderDiagnostic(diagnostic: Diagnostic) {
+  return { element: 'diagnostic', attributes: { at: `${diagnostic.file}:${diagnostic.line}:${diagnostic.column}`, severity: diagnostic.severity, code: diagnostic.code }, text: diagnostic.message };
 }
 
 function severity(category: ProtocolDiagnostic['category']): string {

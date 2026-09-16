@@ -152,7 +152,7 @@ async function main(): Promise<void> {
     removeEndpoint(paths);
     try { database.close(); } catch {}
     for (const stop of stopRequests) {
-      respond(stop.socket, stop.requestId, { element: 'server', attributes: { root, state: 'stopping' }, count: 1 });
+      respond(stop.socket, stop.requestId, { data: { element: 'server', attributes: { root, state: 'stopping' } }, count: 1 });
       finishSocket(stop.socket);
     }
     for (const socket of sockets) if (!stopRequests.some((stop) => stop.socket === socket)) socket.destroy();
@@ -284,7 +284,7 @@ async function main(): Promise<void> {
         return;
       }
       const state = stopping ? 'stopping' : 'ready';
-      respond(socket, request.requestId, { element: 'server', attributes: { root, state, pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s`, uptime: `${Math.floor(performance.now() - bootedAtMonotonic)}ms`, memory, tsserver: session.location.path, typescript: session.location.version }, count: 1 });
+      respond(socket, request.requestId, { data: { element: 'server', attributes: { root, state, pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s`, uptime: `${Math.floor(performance.now() - bootedAtMonotonic)}ms`, memory, tsserver: session.location.path, typescript: session.location.version } }, count: 1 });
       return;
     }
     if (request.operation === 'stop') {

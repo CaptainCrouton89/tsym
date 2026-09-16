@@ -1,6 +1,5 @@
 import { statSync } from 'node:fs';
 import path from 'node:path';
-import { escapeText } from '../../output.js';
 import { DeclarationError } from '../../core/declarations.js';
 import { TsServerError } from '../../server/tsserver.js';
 import { isContainer, keep, lineCount, navtree, readSymbols, scopeFiles, type ReadSymbol } from '../../read/read.js';
@@ -37,7 +36,7 @@ const handler: SemanticHandler = async (context, invocation) => {
   const shown = limit === undefined ? rows : rows.slice(0, limit);
   const symbolsCount = files.flatMap((file) => select(file.symbols, flags, requestedDirectory ? depth - 1 : depth, flags['--members'] === true)).length;
   const receipt = `${shown.length} outline row${shown.length === 1 ? '' : 's'}${limit !== undefined && rows.length > shown.length ? `, limit ${limit}` : ''}${scope.notInProgram > 0 ? `, ${scope.notInProgram} not in program` : ''}, ${Math.round(performance.now() - started)} ms`;
-  return { element: 'outline', attributes: { path: invocation.input.args.join(' ') || '.', depth, symbols: symbolsCount, files: files.length }, body: shown.map((row) => row.text).join('\n'), count: shown.length, receipt };
+  return { data: { element: 'outline', attributes: { path: invocation.input.args.join(' ') || '.', depth, symbols: symbolsCount, files: files.length }, text: shown.map((row) => row.text).join('\n') }, count: shown.length, receipt };
 };
 
 interface FileSymbols { file: string; source: string; symbols: ReadSymbol[]; }
@@ -66,7 +65,7 @@ function containers(root: string, files: FileSymbols[], flags: Record<string, bo
   }
   return [...grouped.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, group]) => {
     const count = group.flatMap((file) => select(file.symbols, flags, 1, flags['--members'] === true)).length;
-    return { text: `${escapeText(name)}  (${group.length} ${group.length === 1 ? 'file' : 'files'}, ${count} symbols)` };
+    return { text: `${name}  (${group.length} ${group.length === 1 ? 'file' : 'files'}, ${count} symbols)` };
   });
 }
 
@@ -74,7 +73,7 @@ function symbolRow(symbol: ReadSymbol, source: string, flags: Record<string, boo
   const modifiers = symbol.exported ? '  export' : '';
   const members = symbol.children.filter((child) => (flags['--imports'] === true || child.kind !== 'alias') && keep(child, flags)).length;
   const memberCount = isContainer(symbol) ? `, ${members} members` : '';
-  return `${escapeText(symbol.address)}  ${symbol.kind}${modifiers}  ${escapeText(symbol.qualifiedName)}  (${lineCount(source, symbol.span)}L${memberCount})`;
+  return `${symbol.address}  ${symbol.kind}${modifiers}  ${symbol.qualifiedName}  (${lineCount(source, symbol.span)}L${memberCount})`;
 }
 
 function byPosition(a: ReadSymbol, b: ReadSymbol): number { return a.span.start.line - b.span.start.line || a.span.start.offset - b.span.start.offset; }

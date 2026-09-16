@@ -22,14 +22,14 @@ export async function invokeResident(invocation: Invocation): Promise<Completion
 export async function serverStatus(rootOverride?: string): Promise<Completion> {
   const root = discoverRoot(rootOverride);
   const paths = pathsForRoot(root);
-  if (!existsSync(paths.port)) return { element: 'server', attributes: { root, state: 'stopped' }, count: 0 };
+  if (!existsSync(paths.port)) return { data: { element: 'server', attributes: { root, state: 'stopped' } }, count: 0 };
   return send(root, 'status', undefined, false);
 }
 
 export async function serverStop(rootOverride?: string): Promise<Completion> {
   const root = discoverRoot(rootOverride);
   const paths = pathsForRoot(root);
-  if (!existsSync(paths.port)) return { element: 'server', attributes: { root, state: 'stopped' }, count: 0 };
+  if (!existsSync(paths.port)) return { data: { element: 'server', attributes: { root, state: 'stopped' } }, count: 0 };
   return send(root, 'stop', undefined, false);
 }
 

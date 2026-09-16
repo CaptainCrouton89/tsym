@@ -1,6 +1,5 @@
 import path from 'node:path';
 import { matchesPathFilters } from '../../core/receipt.js';
-import { escapeText, xml } from '../../output.js';
 import type { RenameEdit, RenameFilePlan, RenamePlan } from '../rename-apply.js';
 import type { Answer, InvocationError } from '../types.js';
 import type { SemanticHandler } from '../handlers.js';
@@ -45,9 +44,7 @@ const handler: SemanticHandler = async (context, invocation) => {
     const visible = plan.files.filter((file) => matchesPathFilters(file.path, { in: strings(invocation.input.flags['--in']), exclude: strings(invocation.input.flags['--exclude']) }));
     const sites = visible.reduce((total, file) => total + file.edits.length, 0);
     const answer: Answer & { renamePlan: RenamePlan } = {
-      element: 'rename',
-      attributes: { symbol: declaration.address, from: declaration.name, to: newName, sites, files: visible.length, applied: false },
-      body: visible.map(renderFile).join('\n'),
+      data: { element: 'rename', attributes: { symbol: declaration.address, from: declaration.name, to: newName, sites, files: visible.length, applied: false }, children: visible.map(renderFile) },
       count: sites,
       receipt: `${sites} rename site${sites === 1 ? '' : 's'} across ${visible.length} file${visible.length === 1 ? '' : 's'}, 0 ms`,
       renamePlan: plan,
@@ -94,9 +91,8 @@ function utf16Offset(source: string, position: { line: number; offset: number })
   return result;
 }
 
-function renderFile(file: RenameFilePlan): string {
-  const rows = file.edits.map((edit) => `${edit.line}:${edit.col}  ${escapeText(edit.oldText)} → ${escapeText(edit.replacement)}`).join('\n');
-  return xml('file', { path: file.path, sites: file.edits.length }, rows);
+function renderFile(file: RenameFilePlan) {
+  return { element: 'file', attributes: { path: file.path, sites: file.edits.length }, text: file.edits.map((edit) => `${edit.line}:${edit.col}  ${edit.oldText} → ${edit.replacement}`).join('\n') };
 }
 
 function strings(value: boolean | number | string | string[] | undefined): string[] | undefined { return Array.isArray(value) ? value : undefined; }

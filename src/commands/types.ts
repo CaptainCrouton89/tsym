@@ -76,12 +76,15 @@ export interface ToolError {
   next?: string;
 }
 
-export interface Answer {
+export interface OutputNode {
   element: string;
-  attributes?: Record<string, string | number | boolean>;
-  body?: string;
-  /** A complete XML block already assembled from declarations. */
-  raw?: string;
+  attributes?: Record<string, string | number | boolean | undefined>;
+  text?: string;
+  children?: OutputNode[];
+}
+
+export interface Answer {
+  data: OutputNode | OutputNode[];
   count: number;
   receipt?: string;
 }
