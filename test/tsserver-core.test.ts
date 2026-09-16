@@ -67,3 +67,26 @@ test('a resolver rejection inside a handler becomes an exit-2 invocation error, 
   assert.equal(missing.problems[0].expected, 'an existing file or directory under --root');
   assert.match(missing.problems[0].next!, /symbols show -h/);
 });
+
+test('a bare name with several navto candidates is resolved one request at a time and reports the candidates', async () => {
+  const temp = mkdtempSync(path.join(tmpdir(), 'symbols-ambiguous-'));
+  const root = path.join(temp, 'fixture');
+  cpSync('test/fixture', root, { recursive: true });
+  writeFileSync(path.join(root, 'src', 'dup-a.ts'), 'export const dup = 1;\n');
+  writeFileSync(path.join(root, 'src', 'dup-b.ts'), 'export const dup = 2;\n');
+  const session = new TsServerSession(root);
+  try {
+    const projects = new ProjectRegistry(root, session);
+    await projects.bootstrap();
+    const resolver = new DeclarationResolver(root, session, projects, new SourceReader(session.location.path));
+    await assert.rejects(resolver.resolve('dup'), (error: unknown) => {
+      assert.ok(error instanceof DeclarationError, `expected DeclarationError, got ${String(error)}`);
+      assert.equal(error.code, 'ambiguous-symbol');
+      assert.deepEqual(error.candidates.sort(), ['src/dup-a.ts:1:14', 'src/dup-b.ts:1:14']);
+      return true;
+    });
+  } finally {
+    session.stop();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});

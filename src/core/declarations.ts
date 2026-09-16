@@ -37,10 +37,13 @@ export class DeclarationResolver {
     const body = await this.session.navto(name);
     const raw = Array.isArray(body) ? body as NavtoItem[] : [];
     const matching = raw.filter((item) => item.name === name || qualified && `${item.containerName ?? ''}.${item.name}` === name).filter((item) => qualified || !item.containerName);
-    const normalized = unique(await Promise.all(matching.map(async (item) => {
+    // Each candidate costs one definitionAndBoundSpan request, and the session takes one request at a time.
+    const records: DeclarationRecord[] = [];
+    for (const item of matching) {
       const file = path.resolve(item.file);
-      return this.resolveAddress({ path: relative(this.root, file), line: item.start.line, col: item.start.offset });
-    })));
+      records.push(await this.resolveAddress({ path: relative(this.root, file), line: item.start.line, col: item.start.offset }));
+    }
+    const normalized = unique(records);
     if (normalized.length === 0) throw new DeclarationError('unresolvable-symbol', `No declaration matches ${name}.`);
     if (normalized.length > 1) throw new DeclarationError('ambiguous-symbol', `${name} is ambiguous.`, normalized.map((item) => item.address));
     return normalized[0]!;
