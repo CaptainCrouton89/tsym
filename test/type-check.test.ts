@@ -13,8 +13,10 @@ function setup() {
   writeFileSync(path.join(root, 'src/type-doc.ts'), `/**\n * Returns the input after recording why the caller supplied it.\n * @param value Text to return.\n * @returns The supplied text.\n */\nexport function documentedType(value: string): string {\n  return value;\n}\n`);
   writeFileSync(path.join(root, 'src/check-diagnostics.ts'), 'export const diagnosticValue: string = 42;\n');
   writeFileSync(path.join(root, 'README.md'), '# outside the TypeScript project\n');
-  const run = (...args: string[]) => spawnSync(process.execPath, ['dist/cli.js', '--root', root, ...args], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } });
-  return { temp, cache, run };
+  const cli = path.resolve('dist/cli.js');
+  const run = (...args: string[]) => runFrom(root, ...args);
+  const runFrom = (cwd: string, ...args: string[]) => spawnSync(process.execPath, [cli, '--root', root, ...args], { cwd, encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: cache } });
+  return { temp, cache, root, run, runFrom };
 }
 
 async function close(temp: string, cache: string, run: (...args: string[]) => ReturnType<typeof spawnSync>): Promise<void> {
@@ -48,7 +50,7 @@ test('type preserves quickinfo, documentation, tags, and a type declaration addr
 });
 
 test('check reports file diagnostics, filters before the limit, and clean files exit one', async () => {
-  const { temp, cache, run } = setup();
+  const { temp, cache, root, run, runFrom } = setup();
   try {
     const diagnostic = run('check', 'src/check-diagnostics.ts', '--errors-only');
     assert.equal(diagnostic.status, 0);
@@ -61,6 +63,13 @@ test('check reports file diagnostics, filters before the limit, and clean files 
     const clean = run('check', 'src/greet.ts');
     assert.equal(clean.status, 1);
     assert.match(clean.stdout, /<check scope="src\/greet.ts" errors="0" warnings="0"/);
+
+    const fromSubdirectory = runFrom(path.join(root, 'src'), 'check', 'check-diagnostics.ts', '--errors-only');
+    assert.equal(fromSubdirectory.status, 0, 'a relative operand resolves from the client cwd, not the root');
+    assert.match(fromSubdirectory.stdout, /<diagnostic at="src\/check-diagnostics.ts:1:14"/);
+    const rootRelativeFromSubdirectory = runFrom(path.join(root, 'src'), 'check', 'src/check-diagnostics.ts');
+    assert.equal(rootRelativeFromSubdirectory.status, 2);
+    assert.match(rootRelativeFromSubdirectory.stderr, /no-such-path/);
 
     const project = run('check', '--errors-only');
     assert.equal(project.status, 0);

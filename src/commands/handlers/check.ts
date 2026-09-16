@@ -32,7 +32,7 @@ const handler: SemanticHandler = async (context, invocation) => {
     await context.projects.bootstrap();
     const paths = invocation.input.args;
     const diagnostics = paths.length > 0
-      ? await diagnosticsForFiles(context, await explicitFiles(context, paths))
+      ? await diagnosticsForFiles(context, await explicitFiles(context, invocation, paths))
       : await diagnosticsForProjects(context);
     const filtered = finish(diagnostics, invocation);
     const errors = filtered.filter((diagnostic) => diagnostic.severity === 'error').length;
@@ -51,15 +51,15 @@ const handler: SemanticHandler = async (context, invocation) => {
   }
 };
 
-async function explicitFiles(context: Parameters<SemanticHandler>[0], inputs: readonly string[]): Promise<string[]> {
+async function explicitFiles(context: Parameters<SemanticHandler>[0], invocation: Parameters<SemanticHandler>[1], inputs: readonly string[]): Promise<string[]> {
   const workspace = new Workspace(context.root, null, 'none');
   const candidates = workspace.files().map((file) => path.join(context.root, file));
   const files: string[] = [];
   for (const input of inputs) {
     const glob = hasGlob(input);
     const matches = glob
-      ? candidates.filter((file) => matchesGlob(relative(context.root, file), input))
-      : [path.resolve(context.root, input)];
+      ? candidates.filter((file) => matchesGlob(relative(invocation.cwd, file), input))
+      : [path.resolve(invocation.cwd, input)];
     if (matches.length === 0 || !glob && !existsSync(matches[0]!)) throw invocationFailure('no-such-path', `${input} does not exist.`, input, 'an existing TypeScript file or glob with matches');
     for (const file of matches) {
       if (!existsSync(file)) throw invocationFailure('no-such-path', `${input} does not exist.`, input, 'an existing TypeScript file');

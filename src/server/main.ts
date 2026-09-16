@@ -231,7 +231,7 @@ async function main(): Promise<void> {
       const requestInvocation = queued.request.invocation;
       if (!requestInvocation) throw new Error('invoke request omitted its invocation');
       const declaration = findNode(requestInvocation.path).node;
-      const completion = await executeSemantic(semantic, { root, json: false, path: requestInvocation.path, declaration, input: { args: requestInvocation.args, flags: requestInvocation.flags, explicit: new Set(requestInvocation.explicit) } });
+      const completion = await executeSemantic(semantic, { root, cwd: requestInvocation.cwd, json: false, path: requestInvocation.path, declaration, input: { args: requestInvocation.args, flags: requestInvocation.flags, explicit: new Set(requestInvocation.explicit) } });
       if ('category' in completion && completion.category === 'tool' && !completion.logPath) completion.logPath = paths.log;
       if (!retired) respond(queued.socket, queued.request.requestId, completion);
     } catch (error) {

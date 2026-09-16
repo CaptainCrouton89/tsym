@@ -56,7 +56,7 @@ test('geterrForProject resolves on its requestCompleted event with every diagnos
 });
 
 test('a resolver rejection inside a handler becomes an exit-2 invocation error, not a tool error', async () => {
-  const invocation = { root: '/r', json: false, path: ['show'], declaration: { name: 'show', description: '', argument: { name: 'symbol', repeat: '1+' as const, description: '' } }, input: { args: ['nope'], flags: {}, explicit: new Set<string>() } };
+  const invocation = { root: '/r', cwd: '/r', json: false, path: ['show'], declaration: { name: 'show', description: '', argument: { name: 'symbol', repeat: '1+' as const, description: '' } }, input: { args: ['nope'], flags: {}, explicit: new Set<string>() } };
   const ambiguous = declarationError(new DeclarationError('ambiguous-symbol', 'x is ambiguous.', ['a.ts:1:1', 'b.ts:2:2']), invocation);
   assert.equal(ambiguous.category, 'invocation');
   assert.equal(ambiguous.code, 'ambiguous-symbol');

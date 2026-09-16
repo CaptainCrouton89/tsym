@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import type { CommandDeclaration, Constraint, FlagDeclaration, Invocation, InvocationError, ParsedInput, ValidationProblem } from './types.js';
 
 const kinds = ['function', 'class', 'interface', 'type', 'enum', 'const', 'let', 'var', 'method', 'property', 'getter', 'setter', 'constructor', 'module'] as const;
@@ -84,7 +85,7 @@ export function findNode(tokens: readonly string[]): { node: CommandDeclaration;
   return { node, consumed };
 }
 
-export function parseInvocation(argv: readonly string[]): Invocation | InvocationError | { help: CommandDeclaration } {
+export function parseInvocation(argv: readonly string[], cwd: string = realpathSync(process.cwd())): Invocation | InvocationError | { help: CommandDeclaration } {
   const helpIndex = argv.findIndex((token) => token === '-h' || token === '--help');
   const withoutHelp = helpIndex >= 0 ? [...argv.slice(0, helpIndex), ...argv.slice(helpIndex + 1)] : [...argv];
   const { tokens: noHelp, commandTokens } = normalizeGlobals(withoutHelp);
@@ -102,7 +103,7 @@ export function parseInvocation(argv: readonly string[]): Invocation | Invocatio
   const json = parsed.input.flags['--json'] === true;
   const constraintProblems = (node.constraints ?? []).flatMap((constraint) => constraint.check(parsed.input));
   if (parsed.problems.length > 0 || constraintProblems.length > 0) return invalid(node, [...parsed.problems, ...constraintProblems]);
-  return { root, json, path: noHelp.slice(0, consumed), declaration: node, input: parsed.input };
+  return { root, cwd, json, path: noHelp.slice(0, consumed), declaration: node, input: parsed.input };
 }
 
 function parseArgs(tokens: readonly string[], node: CommandDeclaration): { input: ParsedInput; problems: ValidationProblem[] } {

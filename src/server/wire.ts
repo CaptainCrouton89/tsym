@@ -4,7 +4,7 @@ import type { Answer, Invocation, InvocationError, ToolError } from '../commands
 export const WIRE_VERSION = 1;
 export type Operation = 'invoke' | 'status' | 'stop';
 
-export interface WireInvocation { path: string[]; args: string[]; flags: Invocation['input']['flags']; explicit: string[]; }
+export interface WireInvocation { path: string[]; cwd: string; args: string[]; flags: Invocation['input']['flags']; explicit: string[]; }
 
 export interface WireRequest {
   version: typeof WIRE_VERSION;
@@ -31,7 +31,7 @@ export interface ResponseFrame {
 export type WireFrame = PhaseFrame | ResponseFrame;
 
 export function request(root: string, operation: Operation, invocation?: Invocation): WireRequest {
-  return { version: WIRE_VERSION, requestId: randomUUID(), root, operation, invocation: invocation ? { path: invocation.path, args: invocation.input.args, flags: invocation.input.flags, explicit: [...invocation.input.explicit] } : undefined };
+  return { version: WIRE_VERSION, requestId: randomUUID(), root, operation, invocation: invocation ? { path: invocation.path, cwd: invocation.cwd, args: invocation.input.args, flags: invocation.input.flags, explicit: [...invocation.input.explicit] } : undefined };
 }
 
 export function writeFrame(stream: NodeJS.WritableStream, frame: WireRequest | WireFrame): void { stream.write(JSON.stringify(frame) + '\n'); }

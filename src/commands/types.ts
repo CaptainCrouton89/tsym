@@ -52,6 +52,8 @@ export interface ValidationProblem {
 
 export interface Invocation {
   root: string | undefined;
+  /** The client's real working directory. Filesystem operands resolve from it; symbol addresses resolve from root. */
+  cwd: string;
   json: boolean;
   path: string[];
   declaration: CommandDeclaration;
