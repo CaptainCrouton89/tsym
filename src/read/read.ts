@@ -78,4 +78,8 @@ export function declarationText(source: string, span: Span, kind: string): strin
   return /^(\s*)(?:export\s+)?(?:declare\s+)?(?:const|let|var)\b/.test(prefix) ? source.slice(lineStart, statementEnd < 0 ? end : statementEnd + 1) : sourceSpan(source, span);
 }
 
-export function normalKind(kind: string): string { return kind === 'module' ? 'namespace' : kind; }
+export function normalKind(kind: string): string {
+  const declarations: Record<string, string> = { FunctionDeclaration: 'function', ClassDeclaration: 'class', InterfaceDeclaration: 'interface', TypeAliasDeclaration: 'type', EnumDeclaration: 'enum', VariableDeclaration: 'const', MethodDeclaration: 'method', PropertyDeclaration: 'property', GetAccessor: 'getter', SetAccessor: 'setter', Constructor: 'constructor', ModuleDeclaration: 'module', ImportSpecifier: 'alias', ExportSpecifier: 'alias' };
+  if (kind === 'alias' || kind === 'enum member') return kind === 'enum member' ? 'property' : kind;
+  return declarations[kind] ?? kind;
+}
