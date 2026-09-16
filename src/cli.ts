@@ -1,4 +1,5 @@
 import { renderHelp } from './commands/help.js';
+import { localSearch } from './commands/handlers/search.js';
 import { parseInvocation } from './commands/tree.js';
 import type { Completion, Invocation } from './commands/types.js';
 import { renderCompletion } from './output.js';
@@ -7,7 +8,7 @@ import { invokeResident, serverReload, serverStatus, serverStop } from './server
 async function main(argv: string[]): Promise<number> {
   const parsed = parseInvocation(argv);
   if ('help' in parsed) {
-    const state = await helpState(rootFlag(argv));
+    const state = parsed.help.name === 'search' ? '' : await helpState(rootFlag(argv));
     return emit({ element: 'command', raw: renderHelp(parsed.help, state), count: 1 }, false);
   }
   if ('category' in parsed) return emit(parsed, false);
@@ -19,6 +20,7 @@ async function dispatch(invocation: Invocation): Promise<Completion> {
     case 'server-status': return serverStatus(invocation.root);
     case 'server-stop': return serverStop(invocation.root);
     case 'server-reload': return serverReload(invocation.root);
+    case 'search': return localSearch(invocation);
     default: return invokeResident(invocation);
   }
 }

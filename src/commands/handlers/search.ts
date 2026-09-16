@@ -1,10 +1,25 @@
+import { escapeText } from '../../output.js';
+import { formatReceipt } from '../../core/receipt.js';
+import { search } from '../../core/search.js';
+import { openWorkspace } from '../../core/workspace.js';
+import type { Answer, Invocation, ToolError } from '../types.js';
 import type { SemanticHandler } from '../handlers.js';
 
-const handler: SemanticHandler = async (_context, invocation) => ({
-  category: 'tool',
-  code: 'not-implemented',
-  message: `symbols ${invocation.path.join(' ')} has no semantic handler yet.`,
-  next: 'Retry after the corresponding leaf handler lands.',
-});
+export async function localSearch(invocation: Invocation): Promise<Answer | ToolError> {
+  const result = await search(openWorkspace(invocation.root), invocation.input.args[0]!, {
+    in: invocation.input.flags['--in'] as string[] | undefined,
+    exclude: invocation.input.flags['--exclude'] as string[] | undefined,
+    limit: invocation.input.flags['--limit'] as number | undefined,
+  });
+  return {
+    element: 'search',
+    attributes: { pattern: invocation.input.args[0]!, count: result.items.length },
+    body: result.items.map((match) => `${match.path}:${match.start.line}:${match.start.col}  ${escapeText(match.text)}`).join('\n'),
+    count: result.items.length,
+    receipt: formatReceipt(result.receipt),
+  };
+}
+
+const handler: SemanticHandler = async (_context, invocation) => localSearch(invocation);
 
 export default handler;
