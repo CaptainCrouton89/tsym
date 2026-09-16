@@ -1,0 +1,6 @@
+export class RenameStringHolder {
+  "renameStringValue" = 1;
+}
+
+export const renameStringObject = new RenameStringHolder();
+export const renameStringRead = renameStringObject["renameStringValue"];

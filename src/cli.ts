@@ -1,7 +1,8 @@
 import { renderHelp } from './commands/help.js';
 import { localSearch } from './commands/handlers/search.js';
+import { applyRenamePlan, type RenameAnswer } from './commands/rename-apply.js';
 import { parseInvocation } from './commands/tree.js';
-import type { Completion, Invocation } from './commands/types.js';
+import type { Answer, Completion, Invocation } from './commands/types.js';
 import { renderCompletion } from './output.js';
 import { invokeResident, serverReload, serverStatus, serverStop } from './server/client.js';
 
@@ -21,9 +22,20 @@ async function dispatch(invocation: Invocation): Promise<Completion> {
     case 'server-stop': return serverStop(invocation.root);
     case 'server-reload': return serverReload(invocation.root);
     case 'search': return localSearch(invocation);
+    case 'rename': return applyRename(invocation);
     default: return invokeResident(invocation);
   }
 }
+
+async function applyRename(invocation: Invocation): Promise<Completion> {
+  const completion = await invokeResident(invocation);
+  if (invocation.input.flags['--apply'] !== true || !isRenameAnswer(completion)) return completion;
+  const applied = await applyRenamePlan(completion.renamePlan);
+  if ('category' in applied) return applied;
+  return { ...completion, attributes: { ...completion.attributes, applied: true } };
+}
+
+function isRenameAnswer(completion: Completion): completion is Answer & RenameAnswer { return !('category' in completion) && 'renamePlan' in completion; }
 
 async function helpState(root: string | undefined): Promise<string> {
   const status = await serverStatus(root);
