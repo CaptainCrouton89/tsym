@@ -28,7 +28,8 @@
     "typecheck": "node node_modules/ts5/bin/tsc --noEmit",
     "test": "node --test --import tsx test/*.test.ts",
     "dev": "tsx src/cli.ts",
-    "validate:crouter": "tsx scripts/validate-crouter.ts"
+    "validate:crouter": "tsx scripts/validate-crouter.ts",
+    "validate:queries": "tsx scripts/validate-queries.ts"
   },
   "engines": {
     "node": ">=22.13"

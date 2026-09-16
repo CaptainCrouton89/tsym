@@ -80,6 +80,22 @@ test('schema supports every relationship and pair-qualified COPY', () => {
   }
 });
 
+test('bounded queries interrupt an unbounded variable-length traversal', () => {
+  const temp = temporaryStore();
+  const store = new Store(temp.path, { boundedQueryTimeoutMs: 200 });
+  try {
+    loadGraph(store, { declarations: Array.from({ length: 40 }, (_, index) => declaration(`src/file.ts#d${index}`)), externals: [], relationships: [] });
+    store.execute('CREATE REL TABLE E(FROM Declaration TO Declaration)');
+    store.execute('MATCH (a:Declaration), (b:Declaration) CREATE (a)-[:E]->(b)');
+    const started = performance.now();
+    assert.throws(() => store.executeBounded('MATCH (a:Declaration)-[:E*1..12]->(b:Declaration) RETURN count(*)'), /Interrupted\./);
+    assert.ok(performance.now() - started < 1_000, 'bounded query did not interrupt promptly');
+  } finally {
+    store.close();
+    remove(temp.root);
+  }
+});
+
 test('replaces one file and all incident relationships in one transaction', () => {
   const temp = temporaryStore();
   const store = new Store(temp.path);

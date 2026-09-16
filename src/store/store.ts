@@ -4,11 +4,23 @@ import path from 'node:path';
 import { NODE_TABLES, RELATION_TABLES, SCHEMA_STATEMENTS } from './schema.js';
 
 const ownedStores = new Set<string>();
+const DEFAULT_BOUNDED_QUERY_TIMEOUT_MS = 30_000;
+
+export interface StoreOptions {
+  boundedQueryTimeoutMs?: number;
+}
 
 export class StoreOwnershipError extends Error {
   constructor(readonly storePath: string, readonly ownerPid?: number) {
     super(ownerPid === undefined ? `The tsym store at ${storePath} is already open in this process.` : `The tsym store at ${storePath} is owned by process ${ownerPid}.`);
     this.name = 'StoreOwnershipError';
+  }
+}
+
+export class StoreReadOnlyError extends Error {
+  constructor() {
+    super('Query statements must be read-only.');
+    this.name = 'StoreReadOnlyError';
   }
 }
 
@@ -19,10 +31,13 @@ export class Store {
   private readonly ownerPath: string;
   private database: Database | undefined;
   private connection: Connection | undefined;
+  private boundedConnection: Connection | undefined;
   private closed = false;
+  private readonly boundedQueryTimeoutMs: number;
 
-  constructor(storePath: string) {
+  constructor(storePath: string, options: StoreOptions = {}) {
     this.path = path.resolve(storePath);
+    this.boundedQueryTimeoutMs = options.boundedQueryTimeoutMs ?? DEFAULT_BOUNDED_QUERY_TIMEOUT_MS;
     this.ownerPath = path.join(this.path, '.tsym-owner');
     mkdirSync(this.path, { recursive: true, mode: 0o700 });
     acquireOwnership(this.path, this.ownerPath);
@@ -53,6 +68,16 @@ export class Store {
     return collect(result);
   }
 
+  /** Executes a read query on a separate connection whose 30-second engine timeout never affects writes. */
+  executeBounded(statement: string, parameters?: Record<string, LbugValue>): StoreRow[] {
+    this.assertOpen();
+    const connection = this.bounded();
+    const prepared = connection.prepareSync(statement);
+    if (!prepared.isSuccess()) throw new Error(prepared.getErrorMessage());
+    if (!prepared.isReadOnly()) throw new StoreReadOnlyError();
+    return collect(connection.executeSync(prepared, parameters));
+  }
+
   transaction<T>(work: () => T): T {
     this.execute('BEGIN TRANSACTION');
     try {
@@ -72,9 +97,22 @@ export class Store {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    try { this.connection?.closeSync(); } finally {
-      try { this.database?.closeSync(); } finally { releaseOwnership(this.path, this.ownerPath); }
+    try { this.boundedConnection?.closeSync(); } finally {
+      try { this.connection?.closeSync(); } finally {
+        try { this.database?.closeSync(); } finally { releaseOwnership(this.path, this.ownerPath); }
+      }
     }
+  }
+
+  private bounded(): Connection {
+    if (this.boundedConnection !== undefined) return this.boundedConnection;
+    const database = this.database;
+    if (database === undefined) throw new Error('Store did not finish opening.');
+    const connection = new Connection(database);
+    connection.initSync();
+    connection.setQueryTimeout(this.boundedQueryTimeoutMs);
+    this.boundedConnection = connection;
+    return connection;
   }
 
   private assertOpen(): void {

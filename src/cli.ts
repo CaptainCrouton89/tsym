@@ -25,8 +25,22 @@ async function dispatch(invocation: Invocation): Promise<Completion> {
     case 'server-reload': return serverReload(invocation.root);
     case 'search': return localSearch(invocation);
     case 'rename': return applyRename(invocation);
+    case 'query': return queryFromStdin(invocation);
     default: return invokeResident(invocation);
   }
+}
+
+async function queryFromStdin(invocation: Invocation): Promise<Completion> {
+  if (invocation.input.args[0] !== '-') return invokeResident(invocation);
+  if (process.stdin.isTTY) return { category: 'invocation', code: 'usage', problems: [{ field: '<cypher>', received: '- with no piped input', expected: 'a query on stdin', next: 'Pipe the query or pass it as the positional argument.' }] };
+  invocation.input.args[0] = await readStdin();
+  return invokeResident(invocation);
+}
+
+async function readStdin(): Promise<string> {
+  let text = '';
+  for await (const chunk of process.stdin) text += chunk;
+  return text;
 }
 
 async function applyRename(invocation: Invocation): Promise<Completion> {

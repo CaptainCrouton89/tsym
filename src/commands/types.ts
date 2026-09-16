@@ -35,7 +35,7 @@ export interface CommandDeclaration {
   state?: () => string | null;
 }
 
-export type HandlerName = 'outline' | 'find' | 'show' | 'type' | 'inspect' | 'search' | 'check' | 'rename' | 'server-status' | 'server-stop' | 'server-reload';
+export type HandlerName = 'outline' | 'find' | 'show' | 'type' | 'inspect' | 'query' | 'search' | 'check' | 'rename' | 'server-status' | 'server-stop' | 'server-reload';
 
 export interface ParsedInput {
   args: string[];
