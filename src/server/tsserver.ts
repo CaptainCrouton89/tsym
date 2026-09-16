@@ -6,12 +6,19 @@ import { createRequire } from 'node:module';
 interface ProtocolMessage { type?: string; event?: string; seq?: number; request_seq?: number; success?: boolean; command?: string; body?: unknown; message?: string; }
 export interface TsServerLocation { path: string; version: string; }
 export interface FilePosition { file: string; line: number; offset: number; }
+/** One `syntaxDiag`/`semanticDiag`/`suggestionDiag` event body as tsserver emits it. */
+export interface DiagnosticEvent { kind: 'syntaxDiag' | 'semanticDiag' | 'suggestionDiag'; file: string; diagnostics: unknown[]; }
+const DIAGNOSTIC_EVENTS = new Set(['syntaxDiag', 'semanticDiag', 'suggestionDiag']);
+
+type Pending =
+  | { seq: number; kind: 'response'; resolve: (message: ProtocolMessage) => void; reject: (error: Error) => void }
+  | { seq: number; kind: 'completion'; collected: DiagnosticEvent[]; resolve: (events: DiagnosticEvent[]) => void; reject: (error: Error) => void };
 
 export class TsServerSession {
   private child: ChildProcessWithoutNullStreams | null = null;
   private buffer = Buffer.alloc(0);
   private seq = 0;
-  private pending: { seq: number; resolve: (message: ProtocolMessage) => void; reject: (error: Error) => void } | null = null;
+  private pending: Pending | null = null;
   private events: ProtocolMessage[] = [];
   private stopping = false;
   private onCommand: (command: string) => void = () => {};
@@ -53,8 +60,25 @@ export class TsServerSession {
     const seq = ++this.seq;
     const body = JSON.stringify({ seq, type: 'request', command, arguments: args }) + '\n';
     return new Promise<ProtocolMessage>((resolve, reject) => {
-      this.pending = { seq, resolve, reject };
+      this.pending = { seq, kind: 'response', resolve, reject };
       this.onCommand(command);
+      this.child!.stdin.write(body, (error) => { if (error) this.fail(error); });
+    });
+  }
+
+  /**
+   * `geterr`/`geterrForProject` never get an ordinary response: tsserver streams diagnostic events and then a
+   * `requestCompleted` event carrying this request's seq. This occupies the single request slot until that
+   * completion arrives, so a caller checking several projects issues them strictly one after another.
+   */
+  async diagnosticsForProject(file: string, delay = 0): Promise<DiagnosticEvent[]> {
+    this.start();
+    if (this.pending) throw new Error(`tsserver request geterrForProject attempted while ${this.pending.seq} is pending`);
+    const seq = ++this.seq;
+    const body = JSON.stringify({ seq, type: 'request', command: 'geterrForProject', arguments: { file, delay } }) + '\n';
+    return new Promise<DiagnosticEvent[]>((resolve, reject) => {
+      this.pending = { seq, kind: 'completion', collected: [], resolve, reject };
+      this.onCommand('geterrForProject');
       this.child!.stdin.write(body, (error) => { if (error) this.fail(error); });
     });
   }
@@ -100,8 +124,24 @@ export class TsServerSession {
       this.buffer = this.buffer.subarray(start + length);
       let message: ProtocolMessage;
       try { message = JSON.parse(payload.toString('utf8')) as ProtocolMessage; } catch (error) { this.fail(error as Error); return; }
-      if (message.type === 'event') { this.events.push(message); continue; }
-      if (message.type === 'response' && this.pending && message.request_seq === this.pending.seq) {
+      if (message.type === 'event') {
+        const pending = this.pending;
+        if (pending?.kind === 'completion') {
+          if (message.event === 'requestCompleted' && (message.body as { request_seq?: number } | undefined)?.request_seq === pending.seq) {
+            this.pending = null;
+            pending.resolve(pending.collected);
+            continue;
+          }
+          if (message.event && DIAGNOSTIC_EVENTS.has(message.event)) {
+            const body = message.body as { file: string; diagnostics: unknown[] };
+            pending.collected.push({ kind: message.event as DiagnosticEvent['kind'], file: body.file, diagnostics: body.diagnostics });
+            continue;
+          }
+        }
+        this.events.push(message);
+        continue;
+      }
+      if (message.type === 'response' && this.pending?.kind === 'response' && message.request_seq === this.pending.seq) {
         const pending = this.pending;
         this.pending = null;
         pending.resolve(message);

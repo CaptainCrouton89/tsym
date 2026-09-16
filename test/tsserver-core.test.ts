@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { DeclarationResolver } from '../src/core/declarations.js';
+import { DeclarationError, DeclarationResolver } from '../src/core/declarations.js';
+import { declarationError } from '../src/commands/handlers.js';
+import { completionCode } from '../src/output.js';
 import { SourceReader } from '../src/core/source.js';
 import { ProjectRegistry } from '../src/server/projects.js';
 import { TsServerSession } from '../src/server/tsserver.js';
@@ -28,4 +30,40 @@ test('tsserver bootstrap closes its document and canonicalizes declaration and u
     session.stop();
     rmSync(temp, { recursive: true, force: true });
   }
+});
+
+test('geterrForProject resolves on its requestCompleted event with every diagnostic event collected, then frees the request slot', async () => {
+  const temp = mkdtempSync(path.join(tmpdir(), 'symbols-geterr-'));
+  const root = path.join(temp, 'fixture');
+  cpSync('test/fixture', root, { recursive: true });
+  writeFileSync(path.join(root, 'src', 'broken.ts'), 'export const n: number = "text";\n');
+  const session = new TsServerSession(root);
+  try {
+    const projects = new ProjectRegistry(root, session);
+    await projects.bootstrap();
+    const seed = path.join(root, 'src', 'broken.ts');
+    const events = await session.withOpen(seed, () => session.diagnosticsForProject(seed));
+    const semantic = events.filter((event) => event.kind === 'semanticDiag' && event.file === seed);
+    assert.equal(semantic.length, 1);
+    assert.equal((semantic[0].diagnostics[0] as { code: number }).code, 2322);
+    assert.ok(events.some((event) => event.kind === 'syntaxDiag'));
+    // The slot is free again: an ordinary request is accepted rather than rejected as "attempted while pending".
+    assert.ok(await session.navtree(seed));
+  } finally {
+    session.stop();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('a resolver rejection inside a handler becomes an exit-2 invocation error, not a tool error', async () => {
+  const invocation = { root: '/r', json: false, path: ['show'], declaration: { name: 'show', description: '', argument: { name: 'symbol', repeat: '1+' as const, description: '' } }, input: { args: ['nope'], flags: {}, explicit: new Set<string>() } };
+  const ambiguous = declarationError(new DeclarationError('ambiguous-symbol', 'x is ambiguous.', ['a.ts:1:1', 'b.ts:2:2']), invocation);
+  assert.equal(ambiguous.category, 'invocation');
+  assert.equal(ambiguous.code, 'ambiguous-symbol');
+  assert.equal(ambiguous.problems[0].field, 'symbol');
+  assert.equal(ambiguous.problems[0].next, 'Pass one of: a.ts:1:1 b.ts:2:2');
+  assert.equal(completionCode(ambiguous), 2);
+  const missing = declarationError(new DeclarationError('no-such-path', 'nope does not exist.'), invocation);
+  assert.equal(missing.problems[0].expected, 'an existing file or directory under --root');
+  assert.match(missing.problems[0].next!, /symbols show -h/);
 });

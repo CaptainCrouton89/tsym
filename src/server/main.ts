@@ -7,7 +7,7 @@ import { NdjsonReader, WIRE_VERSION, type WireFrame, type WireRequest, writeFram
 import { createSemanticContext } from './context.js';
 import { executeSemantic } from '../commands/handlers.js';
 import { findNode } from '../commands/tree.js';
-import type { Answer, ToolError } from '../commands/types.js';
+import type { Completion, ToolError } from '../commands/types.js';
 
 interface Queued {
   request: WireRequest;
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
     if (!socket.destroyed) send(socket, { type: 'phase', requestId, phase, remainingMs, command });
   };
   const toolError = (code: string, message: string, next: string): ToolError => ({ category: 'tool', code, message, logPath: paths.log, next });
-  const respond = (socket: Socket, requestId: string, completion: Answer | ToolError) => {
+  const respond = (socket: Socket, requestId: string, completion: Completion) => {
     if (!socket.destroyed) send(socket, { type: 'response', requestId, completion: 'category' in completion ? { error: completion } : { answer: completion } });
   };
   const finishSocket = (socket: Socket) => { if (!socket.destroyed) socket.end(); };
@@ -232,7 +232,7 @@ async function main(): Promise<void> {
       if (!requestInvocation) throw new Error('invoke request omitted its invocation');
       const declaration = findNode(requestInvocation.path).node;
       const completion = await executeSemantic(semantic, { root, json: false, path: requestInvocation.path, declaration, input: { args: requestInvocation.args, flags: requestInvocation.flags, explicit: new Set(requestInvocation.explicit) } });
-      if ('category' in completion && !completion.logPath) completion.logPath = paths.log;
+      if ('category' in completion && completion.category === 'tool' && !completion.logPath) completion.logPath = paths.log;
       if (!retired) respond(queued.socket, queued.request.requestId, completion);
     } catch (error) {
       if (error instanceof DeadlineExceeded && error.phase === 'project-load') {

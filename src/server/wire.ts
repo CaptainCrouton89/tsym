@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Invocation, ToolError } from '../commands/types.js';
+import type { Answer, Invocation, InvocationError, ToolError } from '../commands/types.js';
 
 export const WIRE_VERSION = 1;
 export type Operation = 'invoke' | 'status' | 'stop';
@@ -25,7 +25,7 @@ export interface PhaseFrame {
 export interface ResponseFrame {
   type: 'response';
   requestId: string;
-  completion: { answer?: { element: string; attributes?: Record<string, string | number | boolean>; body?: string; count: number; receipt?: string }; error?: ToolError };
+  completion: { answer?: Answer; error?: InvocationError | ToolError };
 }
 
 export type WireFrame = PhaseFrame | ResponseFrame;
