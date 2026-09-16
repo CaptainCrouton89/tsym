@@ -42,7 +42,7 @@ test('build persists heritage edges, dispatch calls, and a null module container
     projects.load();
     const built = buildIndex(root, program, projects, store);
     assert.equal(built.receipt.relationships.EXTENDS, 1);
-    assert.equal(built.receipt.relationships.IMPLEMENTS, 2);
+    assert.equal(built.receipt.relationships.IMPLEMENTS, 3);
     assert.equal(built.receipt.dispatchCalls, 1);
     assert.equal(query(store, "MATCH (d:Declaration {kind: 'module'}) RETURN d.container AS container")[0]?.container, null);
     assert.equal(query(store, 'MATCH (:Declaration)-[r:CALLS {dispatch: true}]->() RETURN count(r) AS count')[0]?.count, 1);

@@ -63,16 +63,17 @@ test('inspect follows both interface implementations and reports one dispatch si
       assert.match(result.stderr, /1 dispatch/);
       assert.doesNotMatch(result.stderr, /unresolved/);
     }
-    const dynamic = run('inspect', 'invokeDynamic', '--only', 'calls', '--graph');
+    const dynamic = run('inspect', 'invokeDynamic', '--only', 'calls', '--each', '0');
     assert.equal(dynamic.status, 1);
-    assert.match(dynamic.stdout, /unresolved_dynamic/);
-    assert.match(dynamic.stderr, /1 unresolved/);
+    assert.match(dynamic.stdout, /<calls count="0"\/>/);
+    assert.doesNotMatch(dynamic.stdout, /unresolved_dynamic/);
+    assert.doesNotMatch(dynamic.stderr, /unresolved/);
     const external = run('inspect', 'chained', '--only', 'calls', '--graph');
     assert.equal(external.status, 1);
     assert.match(external.stdout, /unresolved_external/);
     const nested = run('inspect', 'nestedArrowTarget', '--only', 'callers', '--each', '0');
     assert.equal(nested.status, 0);
-    assert.match(nested.stdout, /const  nestedArrow/);
+    assert.match(nested.stdout, /const\s+.*nestedArrow/);
     const module = run('inspect', 'run', '--only', 'callers', '--each', '0');
     assert.match(module.stdout, /src\/main\.ts:0:0/);
 

@@ -2,16 +2,14 @@ import type { DeclarationRecord } from '../../core/declarations.js';
 import { matchesPathFilters } from '../../core/receipt.js';
 import { normalKind } from '../../read/read.js';
 import { mergeGraphs } from '../../relations/graph.js';
-import { implementations, traverse } from '../../relations/engine.js';
+import { implementations, references, traverse, type ReferenceRow } from '../../relations/store-relations.js';
 import { renderGraph } from '../../relations/mermaid.js';
-import { roleAt, relative, type ProtocolSpan } from '../../relations/syntax.js';
 import type { RelationRow, TraversalResult } from '../../relations/types.js';
 import type { SemanticHandler } from '../handlers.js';
 import type { Answer, OutputNode } from '../types.js';
 
 const relationOrder = ['refs', 'callers', 'calls', 'impl'] as const;
 type Relation = typeof relationOrder[number];
-interface ReferenceRow { path: string; line: number; col: number; kind: string; qualifiedName: string; role: string; }
 const handler: SemanticHandler = async (context, invocation) => {
   const started = performance.now();
   const selected = selectedRelations(invocation.input.flags['--only']);
@@ -64,32 +62,7 @@ async function graphAnswer(context: Parameters<SemanticHandler>[0], seeds: Decla
   return { data: { element: 'inspect', attributes: { graph: true, count }, text: renderGraph(graph).replace(/\n$/, '') }, count, receipt: `${count} traversal rows${excluded ? `, ${excluded} excluded` : ''}${unresolved ? `, ${unresolved} unresolved` : ''}${dispatch ? `, ${dispatch} dispatch` : ''}, ${Math.round(performance.now() - started)} ms` };
 }
 
-async function signature(context: Parameters<SemanticHandler>[0], record: DeclarationRecord): Promise<string> {
-  return context.session.withOpen(record.file, async () => {
-    const response = await context.session.request('quickinfo', { file: record.file, line: record.location.line, offset: record.location.col });
-    if (response.success === false) throw new Error('TypeScript rejected quickinfo.');
-    const body = response.body as { displayString?: unknown };
-    return typeof body?.displayString === 'string' ? body.displayString : record.qualifiedName;
-  });
-}
-
-async function references(context: Parameters<SemanticHandler>[0], record: DeclarationRecord, filters: { in: string[]; exclude: string[] }): Promise<ReferenceRow[]> {
-  const response = await context.session.request('references', { file: record.file, line: record.location.line, offset: record.location.col });
-  if (response.success === false) throw new Error('TypeScript rejected references.');
-  const body = response.body as { refs?: unknown };
-  const refs = Array.isArray(body?.refs) ? body.refs as Array<ProtocolSpan & { isDefinition?: boolean; isWriteAccess?: boolean }> : [];
-  const rows = new Map<string, ReferenceRow>();
-  for (const ref of refs) {
-    const displayPath = relative(context.root, ref.file);
-    if (!matchesPathFilters(displayPath, filters)) continue;
-    const owner = context.source.ownerForSpan(ref.file, ref.start);
-    const qualifiedName = owner?.containerName ? `${owner.containerName}.${owner.name}` : owner?.name ?? pathName(displayPath);
-    const kind = normalKind(owner?.kind ?? 'module');
-    const role = roleAt(context, ref.file, ref.start.line, ref.start.offset, ref.isDefinition === true, ref.isWriteAccess === true);
-    rows.set(`${displayPath}:${ref.start.line}:${ref.start.offset}`, { path: displayPath, line: ref.start.line, col: ref.start.offset, kind, qualifiedName, role });
-  }
-  return [...rows.values()].sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.col - b.col);
-}
+async function signature(_context: Parameters<SemanticHandler>[0], record: DeclarationRecord): Promise<string> { return `${normalKind(record.kind)} ${record.qualifiedName}`; }
 
 function relationBlock<T>(element: string, rows: readonly T[], path: (row: T) => string, each: number, format: (row: T) => string): OutputNode {
   if (!rows.length) return { element, attributes: { count: 0 } };
@@ -109,5 +82,4 @@ function formatTraversal(row: RelationRow): string { return `${row.id}  ${row.de
 function shownRows<T>(rows: readonly T[], each: number): readonly T[] { return each === 0 ? rows : rows.slice(0, each); }
 function selectedRelations(value: boolean | number | string | string[] | undefined): readonly Relation[] { const values = Array.isArray(value) ? value : relationOrder; return relationOrder.filter((relation) => values.includes(relation)); }
 function strings(value: boolean | number | string | string[] | undefined): string[] { return Array.isArray(value) ? value : value === undefined ? [] : [String(value)]; }
-function pathName(value: string): string { const parts = value.split('/'); return parts[parts.length - 1]!; }
 export default handler;

@@ -54,10 +54,9 @@ export function addHeritage(root: string, program: Ts7Host, projects: Configured
             for (const type of clause.types) {
               const target = targetKey(state.checker, state.checker.getSymbolAtLocation(type.expression));
               if (!target) continue;
-              if (clause.token === ts.SyntaxKind.ImplementsKeyword && (ts.isClassDeclaration(node) || ts.isClassExpression(node))) {
-                add({ type: 'IMPLEMENTS', from: source.key, to: target });
-                addMatchingMembers(node, state, target, targetKey, declarationsByKey, add);
-              } else if (clause.token === ts.SyntaxKind.ExtendsKeyword) add({ type: 'EXTENDS', from: source.key, to: target });
+              if (clause.token === ts.SyntaxKind.ImplementsKeyword && (ts.isClassDeclaration(node) || ts.isClassExpression(node))) add({ type: 'IMPLEMENTS', from: source.key, to: target });
+              else if (clause.token === ts.SyntaxKind.ExtendsKeyword) add({ type: 'EXTENDS', from: source.key, to: target });
+              if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) addMatchingMembers(node, state, target, targetKey, declarationsByKey, add);
             }
           }
         }
@@ -83,17 +82,21 @@ export function addHeritage(root: string, program: Ts7Host, projects: Configured
 }
 
 function addMatchingMembers(node: ts.ClassDeclaration | ts.ClassExpression, state: WalkFileState, target: string, targetKey: (checker: Checker, symbol: TsSymbol | undefined) => string | undefined, declarationsByKey: ReadonlyMap<string, readonly ts.Node[]>, add: (relationship: HeritageRelationship) => void): void {
-  const targetDeclaration = declarationsByKey.get(target)?.find((candidate) => ts.isInterfaceDeclaration(candidate));
-  if (!targetDeclaration || !ts.isInterfaceDeclaration(targetDeclaration)) return;
+  const targetDeclaration = declarationsByKey.get(target)?.find((candidate) => ts.isInterfaceDeclaration(candidate) || ts.isClassDeclaration(candidate));
+  if (!targetDeclaration?.name) return;
   const targetType = state.checker.getTypeAtLocation(targetDeclaration.name);
   if (!targetType) return;
   for (const member of node.members) {
     const descriptor = state.byStart.get(member.getStart(state.source));
     const name = memberName(member);
     if (!descriptor || !name || !isIndexedDeclaration(descriptor) || hasModifier(member, ts.SyntaxKind.AbstractKeyword)) continue;
-    const interfaceMember = state.checker.getPropertyOfType(targetType, name);
-    const memberTarget = targetKey(state.checker, interfaceMember);
-    if (memberTarget) add({ type: 'IMPLEMENTS', from: descriptor.key, to: memberTarget });
+    const baseMember = state.checker.getPropertyOfType(targetType, name);
+    const memberTarget = targetKey(state.checker, baseMember);
+    const dispatch = baseMember?.declarations.some((handle) => {
+      const declaration = handle.resolve();
+      return declaration !== undefined && isDispatchTarget(declaration);
+    }) === true;
+    if (memberTarget && dispatch) add({ type: 'IMPLEMENTS', from: descriptor.key, to: memberTarget });
   }
 }
 

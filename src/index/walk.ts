@@ -241,12 +241,21 @@ function statesFor(root: string, program: Ts7Host, configured: readonly Configur
 function ownerForNode(state: WalkFileState, node: ts.Node): KeyedDeclaration {
   if (ts.isSourceFile(node)) return state.indexed.find((descriptor) => descriptor.scope === 'module')!;
   const owner = state.ownersByStart.get(node.getStart(state.source));
-  if (owner) return owner;
+  if (owner && ownsSites(state, owner)) return owner;
   for (let current: ts.Node | undefined = node.parent; current && !ts.isSourceFile(current); current = current.parent) {
     const descriptor = state.byStart.get(current.getStart(state.source));
-    if (descriptor) return descriptor;
+    if (descriptor && ownsSites(state, descriptor)) return descriptor;
   }
   return state.indexed.find((descriptor) => descriptor.scope === 'module')!;
+}
+
+function ownsSites(state: WalkFileState, descriptor: KeyedDeclaration): boolean {
+  const node = state.nodesByStart.get(descriptor.start);
+  if (!node) return true;
+  if (ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isClassExpression(node)) return false;
+  if (!(ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node))) return true;
+  const initializer = node.initializer;
+  return !!initializer && (ts.isFunctionExpression(initializer) || ts.isArrowFunction(initializer) || ts.isClassExpression(initializer));
 }
 
 function declarationSymbolTargets(states: readonly WalkFileState[]): { symbols: Map<number, string | null>; definitions: ReadonlyMap<string, ReadonlyMap<number, string | null>> } {
