@@ -17,7 +17,7 @@ export interface WireRequest {
 export interface PhaseFrame {
   type: 'phase';
   requestId: string;
-  phase: 'accepted' | 'queued' | 'running' | 'project-load-start' | 'project-load-end' | 'command-start' | 'stopping';
+  phase: 'accepted' | 'queued' | 'running' | 'project-load-start' | 'project-load-end' | 'index-build-start' | 'index-build-end' | 'command-start' | 'stopping';
   remainingMs?: number;
   command?: string;
 }

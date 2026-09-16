@@ -6,6 +6,11 @@ import { discoverRoot, ensureStateDirectory, idleSeconds, pathsForRoot, publishS
 import { NdjsonReader, WIRE_VERSION, type WireFrame, type WireRequest, writeFrame } from './wire.js';
 import { createSemanticContext } from './context.js';
 import { Ts7ServerDiedError } from '../ts7/api.js';
+import { buildIndex } from '../index/build.js';
+import { refreshIndex } from '../index/refresh.js';
+import { IndexStateController } from '../index/state.js';
+import { watchIndex, type IndexWatcher, type WatchBatch } from '../index/watch.js';
+import { Store } from '../store/store.js';
 import { executeSemantic } from '../commands/handlers.js';
 import { findNode } from '../commands/tree.js';
 import type { Completion, ToolError } from '../commands/types.js';
@@ -39,6 +44,9 @@ async function main(): Promise<void> {
 
   const semantic = createSemanticContext(root, (chunk) => appendFileSync(paths.log, chunk));
   const { session, program, projects } = semantic;
+  let store: Store | undefined;
+  let index: IndexStateController | undefined;
+  let watcher: IndexWatcher | undefined;
   const bootedAt = new Date();
   const bootedAtMonotonic = performance.now();
   let bootstrapped = false;
@@ -130,8 +138,10 @@ async function main(): Promise<void> {
     server.close(() => process.exit(0));
   };
   const finishRetirement = async (preserve: ReadonlySet<Socket>) => {
+    watcher?.close();
     await session.stopAndWait();
     closeProgram();
+    store?.close();
     removeEndpoint(paths);
     try { database.close(); } catch {}
     for (const socket of sockets) if (!preserve.has(socket)) socket.destroy();
@@ -154,8 +164,10 @@ async function main(): Promise<void> {
   };
   const finishStop = async () => {
     if (idleTimer) clearTimeout(idleTimer);
+    watcher?.close();
     await session.stopAndWait();
     closeProgram();
+    store?.close();
     removeEndpoint(paths);
     try { database.close(); } catch {}
     for (const stop of stopRequests) {
@@ -203,7 +215,19 @@ async function main(): Promise<void> {
     let deadlineTimer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
-        projects.bootstrap(),
+        (async () => {
+          await projects.bootstrap();
+          store = new Store(paths.store);
+          if (active) sendPhase(active.socket, active.request.requestId, 'index-build-start', remaining(loadDeadlineAt));
+          // The watcher starts before the build, not after it: buildIndex takes tens of seconds on a large workspace,
+          // and an edit landing in that window would otherwise never be recorded, publishing a stale index as current.
+          // buildIndex is synchronous, so no watch callback can run until index is assigned below.
+          watcher = watchIndex(root, projects.configured(), refresh, (error) => append(paths, `index refresh failure: ${safe(error)}`), (flush) => index?.markStale(flush));
+          const built = buildIndex(root, program, projects.configured(), store);
+          index = new IndexStateController({ indexedAt: indexedAt(root), state: 'current', built }, (snapshot) => { semantic.index = snapshot; });
+          semantic.store = store;
+          if (active) sendPhase(active.socket, active.request.requestId, 'index-build-end', remaining(loadDeadlineAt));
+        })(),
         new Promise<never>((_, reject) => { deadlineTimer = setTimeout(() => { timedOut = true; reject(new DeadlineExceeded('project-load')); }, 60_000); deadlineTimer.unref(); }),
       ]);
       bootstrapped = true;
@@ -238,6 +262,7 @@ async function main(): Promise<void> {
       const requestInvocation = queued.request.invocation;
       if (!requestInvocation) throw new Error('invoke request omitted its invocation');
       const declaration = findNode(requestInvocation.path).node;
+      if (readsIndex(declaration.handler)) await index?.wait();
       const completion = await executeSemantic(semantic, { root, cwd: requestInvocation.cwd, json: false, path: requestInvocation.path, declaration, input: { args: requestInvocation.args, flags: requestInvocation.flags, explicit: new Set(requestInvocation.explicit) } });
       if ('category' in completion && completion.category === 'tool' && !completion.logPath) completion.logPath = paths.log;
       if (!retired) respond(queued.socket, queued.request.requestId, completion);
@@ -261,6 +286,19 @@ async function main(): Promise<void> {
         else void processQueue();
       }
     }
+  };
+
+  const refresh = async (batch: WatchBatch): Promise<void> => {
+    if (!store || !index) throw new Error('The index refresh ran before startup completed.');
+    await index.rebuild(async () => {
+      const refreshed = refreshIndex(root, program, projects.configured(), store!, index!.current().built, {
+        fileChanges: batch.fileChanges,
+        full: batch.full,
+        validate: process.env.TSYM_VALIDATE_INDEX === '1',
+      });
+      return { indexedAt: indexedAt(root), state: 'current', built: refreshed.built };
+    });
+    if (batch.full) watcher?.refresh();
   };
 
   session.setCommandHandler((command) => {
@@ -349,6 +387,17 @@ function arg(name: string): string | undefined { const index = process.argv.inde
 function isBusy(error: unknown): boolean { return (error as { code?: string; errcode?: number }).code === 'ERR_SQLITE_ERROR' && (error as { errcode?: number }).errcode === 5 || String(error).includes('database is locked'); }
 function append(paths: ServerPaths, message: string): void { appendFileSync(paths.log, `${new Date().toISOString()} ${message}\n`, { mode: 0o600 }); }
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+function readsIndex(handler: string | undefined): boolean {
+  return handler === 'outline' || handler === 'find' || handler === 'show' || handler === 'inspect' || handler === 'query';
+}
+
+function indexedAt(root: string): string {
+  let commit = 'unknown';
+  try { commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
+  catch { /* A package-only workspace has no commit to name. */ }
+  return `${commit} ${new Date().toISOString()}`;
+}
+
 function residentMemory(tsserverPid: number | undefined): number {
   if (tsserverPid === undefined) throw new Error('tsserver is not running');
   const rss = execFileSync('ps', ['-o', 'rss=', '-p', `${process.pid},${tsserverPid}`], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean).map(Number);

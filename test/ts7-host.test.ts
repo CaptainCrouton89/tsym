@@ -89,6 +89,28 @@ test('TypeScript 7 source parsing stays aligned with tsserver coordinates after 
   } finally { close(session, host, temp); }
 });
 
+test('TypeScript 7 refreshes changed disk text and removes deleted files from the next snapshot', () => {
+  const { temp, root } = fixture('disk-refresh');
+  const config = path.join(root, 'tsconfig.json');
+  const changed = path.join(root, 'src', 'greet.ts');
+  const removed = path.join(root, 'src', 'remove-me.ts');
+  const host = new Ts7Host(root);
+  try {
+    writeFileSync(removed, 'export const removeMe = true;\n');
+    host.load([config]);
+    const replacement = 'export const greeting = "fresh";\n';
+    writeFileSync(changed, replacement);
+    host.update({ fileChanges: { changed: [changed] } });
+    assert.equal(host.sourceFile(config, changed)?.text, replacement);
+    rmSync(removed);
+    host.update({ fileChanges: { deleted: [removed] } });
+    assert.equal(host.sourceFile(config, removed), undefined);
+  } finally {
+    host.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('TypeScript 7 disposes replaced snapshots and recovers once after its child is killed', () => {
   const { temp, root } = fixture('recovery');
   const config = path.join(root, 'tsconfig.json');

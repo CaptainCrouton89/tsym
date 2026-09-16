@@ -112,7 +112,9 @@ function exchange(paths: ServerPaths, payload: ReturnType<typeof request>): Prom
       switch (frame.phase) {
         case 'queued': deadlinePhase = 'queued'; break;
         case 'project-load-start':
-        case 'project-load-end': deadlinePhase = 'project-load'; break;
+        case 'project-load-end':
+        case 'index-build-start':
+        case 'index-build-end': deadlinePhase = 'project-load'; break;
         case 'running': deadlinePhase = 'running'; break;
         case 'command-start': command = frame.command; break;
         case 'stopping': stopping = true; break;

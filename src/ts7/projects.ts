@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Project } from 'typescript/unstable/sync';
 import { Ts7Host } from './api.js';
@@ -31,6 +31,13 @@ export class ConfiguredProjects {
     return [...this.projects.values()];
   }
 
+  /** Re-discovers configured projects after a workspace shape change. */
+  reload(): readonly ConfiguredProject[] {
+    this.loaded = false;
+    this.projects.clear();
+    return this.load();
+  }
+
   membership(file: string): ConfiguredProject | null {
     this.load();
     const absolute = path.resolve(file);
@@ -50,17 +57,31 @@ export class ConfiguredProjects {
   records(): readonly ConfiguredProject[] { return [...this.projects.values()]; }
 }
 
-export function discoverConfigs(root: string): string[] {
-  const configs: string[] = [];
+/** Every non-skipped directory in the workspace, including the root. */
+export function discoverDirectories(root: string): string[] {
+  const directories = [path.resolve(root)];
   const visit = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) { if (!skipped.has(entry.name)) visit(full); }
-      else if (entry.isFile() && entry.name === 'tsconfig.json') configs.push(path.resolve(full));
+      if (!entry.isDirectory() || skipped.has(entry.name)) continue;
+      const full = path.resolve(dir, entry.name);
+      directories.push(full);
+      visit(full);
     }
   };
   visit(root);
+  return directories;
+}
+
+export function discoverConfigs(root: string): string[] {
+  const configs = discoverDirectories(root)
+    .map((directory) => path.join(directory, 'tsconfig.json'))
+    .filter((config) => statOrNull(config)?.isFile() === true);
   return configs.sort((left, right) => path.relative(root, left).localeCompare(path.relative(root, right)));
+}
+
+function statOrNull(file: string) {
+  try { return statSync(file); }
+  catch { return null; }
 }
 
 function workspaceSourceFile(root: string, file: string): boolean {

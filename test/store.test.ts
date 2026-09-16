@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { loadGraph, replaceFile, type DeclarationRow, type RelationshipRow, type StoreGraph } from '../src/store/load.js';
+import { loadGraph, replaceFile, replaceFiles, type DeclarationRow, type RelationshipRow, type StoreGraph } from '../src/store/load.js';
 import { readMetadata, writeMetadata } from '../src/store/meta.js';
 import { query } from '../src/store/query.js';
 import { STORE_SCHEMA_VERSION } from '../src/store/schema.js';
@@ -116,6 +116,36 @@ test('replaces one file and all incident relationships in one transaction', () =
     assert.equal(query(store, "MATCH (d:Declaration) WHERE d.key = 'src/a.ts#a' RETURN d.key").length, 0);
     assert.deepEqual(query(store, 'MATCH (d:Declaration)-[:REFERENCES]->(t:Declaration) RETURN d.key AS source, t.key AS target'), [{ source: 'src/b.ts#b', target: 'src/a.ts#next' }]);
     assert.equal(query(store, 'MATCH (e:External) RETURN e.key').length, 0);
+  } finally {
+    store.close();
+    remove(temp.root);
+  }
+});
+
+test('replaces circular files after every replacement declaration exists', () => {
+  const temp = temporaryStore();
+  const store = new Store(temp.path);
+  try {
+    loadGraph(store, {
+      declarations: [declaration('src/a.ts#old', 'src/a.ts'), declaration('src/b.ts#old', 'src/b.ts')],
+      externals: [],
+      relationships: [
+        { type: 'REFERENCES', from: 'src/a.ts#old', to: 'src/b.ts#old', target: 'Declaration', line: 1, col: 1, role: 'read' },
+        { type: 'REFERENCES', from: 'src/b.ts#old', to: 'src/a.ts#old', target: 'Declaration', line: 1, col: 1, role: 'read' },
+      ],
+    });
+    replaceFiles(store, ['src/a.ts', 'src/b.ts'], {
+      declarations: [declaration('src/a.ts#new', 'src/a.ts'), declaration('src/b.ts#new', 'src/b.ts')],
+      externals: [],
+      relationships: [
+        { type: 'REFERENCES', from: 'src/a.ts#new', to: 'src/b.ts#new', target: 'Declaration', line: 1, col: 1, role: 'read' },
+        { type: 'REFERENCES', from: 'src/b.ts#new', to: 'src/a.ts#new', target: 'Declaration', line: 1, col: 1, role: 'read' },
+      ],
+    });
+    assert.deepEqual(query(store, 'MATCH (d:Declaration)-[:REFERENCES]->(t:Declaration) RETURN d.key AS source, t.key AS target ORDER BY source'), [
+      { source: 'src/a.ts#new', target: 'src/b.ts#new' },
+      { source: 'src/b.ts#new', target: 'src/a.ts#new' },
+    ]);
   } finally {
     store.close();
     remove(temp.root);

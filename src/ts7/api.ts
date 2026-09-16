@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { API, type Project, type Snapshot } from 'typescript/unstable/sync';
+import { resolveFileName } from 'typescript/unstable/proto';
 import type { UpdateSnapshotParams } from 'typescript/unstable/proto';
 
 export class Ts7ServerDiedError extends Error {
@@ -12,15 +15,25 @@ export class Ts7Host {
   private api: API;
   private snapshot: Snapshot | undefined;
   private configs: readonly string[] = [];
+  /** Paths named by the most recent update; only these are read from disk, so unchanged files keep the server's native reads. */
+  private changed = new Set<string>();
 
-  constructor(readonly root: string) { this.api = new API({ cwd: root }); }
+  constructor(readonly root: string) { this.api = this.createApi(); }
 
+  /** Opens newly discovered configs and closes vanished ones; project opens are ref-counted, so each open needs its close. */
   load(configs: readonly string[]): readonly Project[] {
+    const open = new Set(this.configs);
+    const next = new Set(configs);
+    const openProjects = configs.filter((config) => !open.has(config));
+    const closeProjects = this.configs.filter((config) => !next.has(config));
     this.configs = [...configs];
-    return this.replaceSnapshot({ openProjects: [...this.configs] }).getProjects();
+    return this.replaceSnapshot({ openProjects, closeProjects }).getProjects();
   }
 
   update(params: UpdateSnapshotParams): readonly Project[] {
+    this.changed = params.fileChanges && !('invalidateAll' in params.fileChanges)
+      ? new Set([...params.fileChanges.changed ?? [], ...params.fileChanges.created ?? [], ...params.fileChanges.deleted ?? []].map((file) => path.resolve(resolveFileName(file))))
+      : new Set();
     return this.replaceSnapshot(params).getProjects();
   }
 
@@ -43,9 +56,13 @@ export class Ts7Host {
 
   private replaceSnapshot(params: UpdateSnapshotParams): Snapshot {
     return this.request(() => {
-      this.disposeSnapshot();
+      const previous = this.snapshot;
       const next = this.api.updateSnapshot(params);
       this.snapshot = next;
+      if (previous) {
+        try { previous.dispose(); }
+        catch (error) { if (!isBadFileDescriptor(error)) throw error; }
+      }
       return next;
     });
   }
@@ -64,8 +81,19 @@ export class Ts7Host {
     this.disposeSnapshot();
     try { this.api.close(); }
     catch (error) { if (!isBadFileDescriptor(error)) throw error; }
-    this.api = new API({ cwd: this.root });
+    this.api = this.createApi();
     if (this.configs.length > 0) this.snapshot = this.api.updateSnapshot({ openProjects: [...this.configs] });
+  }
+
+  private createApi(): API {
+    return new API({ cwd: this.root, fs: { readFile: (file) => {
+      if (!this.changed.has(path.resolve(file))) return undefined;
+      try { return readFileSync(file, 'utf8'); }
+      catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+    } } });
   }
 
   private requireSnapshot(): Snapshot {

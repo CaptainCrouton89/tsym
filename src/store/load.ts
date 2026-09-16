@@ -72,18 +72,25 @@ export function loadGraph(store: Store, graph: StoreGraph): LoadReceipt {
   });
 }
 
-export function replaceFile(store: Store, file: string, graph: StoreGraph): LoadReceipt {
-  if (graph.declarations.some((declaration) => declaration.file !== file)) throw new Error(`Replacement graph contains a declaration outside ${file}.`);
+/** Atomically replaces every changed file, so relationships can target declarations created by the same refresh. */
+export function replaceFiles(store: Store, files: readonly string[], graph: StoreGraph): LoadReceipt {
+  const replaced = new Set(files);
+  if (graph.declarations.some((declaration) => !replaced.has(declaration.file))) throw new Error('Replacement graph contains a declaration outside the replaced files.');
   validateGraph(graph);
   return store.transaction(() => {
-    store.execute(`MATCH (d:Declaration) WHERE d.file = ${literal(file)} DETACH DELETE d`);
-    store.execute('MATCH (e:External) WHERE NOT EXISTS { MATCH (:Declaration)-[]->(e) } DETACH DELETE e');
+    for (const file of replaced) store.execute(`MATCH (d:Declaration) WHERE d.file = ${literal(file)} DETACH DELETE d`);
     copyRows(store, 'Declaration', declarationColumns, graph.declarations);
     copyMissingExternals(store, graph.externals);
     copyMissingCommits(store, graph.commits ?? []);
     copyRelationships(store, graph.relationships);
+    store.execute('MATCH (e:External) WHERE NOT EXISTS { MATCH (:Declaration)-[]->(e) } DETACH DELETE e');
     return receiptFor(graph);
   });
+}
+
+/** One-file compatibility call of the unified replacement transaction. */
+export function replaceFile(store: Store, file: string, graph: StoreGraph): LoadReceipt {
+  return replaceFiles(store, [file], graph);
 }
 
 function clearGraph(store: Store): void {

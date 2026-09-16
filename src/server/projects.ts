@@ -37,6 +37,8 @@ export class ProjectRegistry {
   anySourceFile(file: string) { return this.projects.anySourceFile(file); }
 
   records(): readonly ProjectRecord[] { return this.projects.records(); }
+
+  configured(): ConfiguredProjects { return this.projects; }
 }
 
 export function registryForTsserverPath(tsserverPath: string): ProjectRegistry {
