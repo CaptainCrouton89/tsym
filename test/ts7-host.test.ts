@@ -6,8 +6,11 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { DeclarationError, DeclarationResolver } from '../src/core/declarations.js';
 import { SourceReader } from '../src/core/source.js';
+import { buildIndex } from '../src/index/build.js';
 import { scopeFiles } from '../src/read/read.js';
+import { Store } from '../src/store/store.js';
 import { Ts7Host } from '../src/ts7/api.js';
+import { ConfiguredProjects } from '../src/ts7/projects.js';
 import { ProjectRegistry } from '../src/server/projects.js';
 import { TsServerSession } from '../src/server/tsserver.js';
 
@@ -22,6 +25,19 @@ function close(session: TsServerSession, host: Ts7Host, temp: string) {
   host.close();
   session.stop();
   rmSync(temp, { recursive: true, force: true });
+}
+
+function indexed(root: string, program: Ts7Host) {
+  const projects = new ConfiguredProjects(root, program);
+  const store = new Store(path.join(root, '.tsym-test-store'));
+  projects.load();
+  buildIndex(root, program, projects, store);
+  const source = new SourceReader({
+    refreshFile(file: string) { projects.refreshFile(file); },
+    sourceFile: (file: string) => projects.sourceFile(file),
+    anySourceFile: (file: string) => projects.anySourceFile(file),
+  });
+  return { projects, store, source, resolver: new DeclarationResolver(root, source, () => store) };
 }
 
 test('TypeScript 7 loads each discovered config in one snapshot and assigns overlapping files to the first config', async () => {
@@ -45,15 +61,23 @@ test('TypeScript 7 loads each discovered config in one snapshot and assigns over
 test('unconfigured source remains outside the TypeScript 7 project union and preserves the not-in-program error', async () => {
   const { temp, root } = fixture('outside');
   const outside = path.join(root, 'outside.ts');
+  const generated = path.join(root, 'dist', 'generated.ts');
   writeFileSync(outside, 'export const outside = 1;\n');
+  mkdirSync(path.dirname(generated));
+  writeFileSync(generated, 'export const generated = 1;\n');
+  writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'ES2022' }, include: ['src', 'dist'] }));
   const session = new TsServerSession(root);
   const host = new Ts7Host(root);
   try {
     const projects = new ProjectRegistry(root, session, host);
     await projects.bootstrap();
+    assert.ok(await projects.membership(path.join(root, 'src', 'greet.ts')));
     assert.equal(await projects.membership(outside), null);
-    const resolver = new DeclarationResolver(root, session, projects, new SourceReader(projects));
-    await assert.rejects(resolver.resolve('outside.ts:1:14'), (error: unknown) => error instanceof DeclarationError && error.code === 'not-in-program');
+    assert.equal(await projects.membership(generated), null);
+    const index = indexed(root, host);
+    await assert.rejects(index.resolver.resolve('outside.ts:1:14'), (error: unknown) => error instanceof DeclarationError && error.code === 'not-in-program');
+    await assert.rejects(index.resolver.resolve('dist/generated.ts:1:14'), (error: unknown) => error instanceof DeclarationError && error.code === 'not-in-program');
+    index.store.close();
   } finally { close(session, host, temp); }
 });
 
@@ -67,10 +91,10 @@ test('configured JavaScript files pass the scope filter before project membershi
   try {
     const projects = new ProjectRegistry(root, session, host);
     await projects.bootstrap();
-    const source = new SourceReader(projects);
-    const resolver = new DeclarationResolver(root, session, projects, source);
-    const scope = await scopeFiles({ root, session, program: host, projects, resolver, source }, root, ['src/plain.js']);
+    const index = indexed(root, host);
+    const scope = await scopeFiles({ root, session, program: host, projects, resolver: index.resolver, source: index.source }, root, ['src/plain.js']);
     assert.deepEqual(scope, { files: [file], notInProgram: 0 });
+    index.store.close();
   } finally { close(session, host, temp); }
 });
 
@@ -82,10 +106,13 @@ test('TypeScript 7 source parsing stays aligned with tsserver coordinates after 
   try {
     const projects = new ProjectRegistry(root, session, host);
     await projects.bootstrap();
-    const resolver = new DeclarationResolver(root, session, projects, new SourceReader(projects));
-    assert.equal((await resolver.resolve('greet')).address, 'src/greet.ts:2:17');
+    const index = indexed(root, host);
+    assert.equal((await index.resolver.resolve('greet')).address, 'src/greet.ts:2:17');
     writeFileSync(file, `\n${readFileSync(file, 'utf8')}`);
-    assert.match((await resolver.resolve('greet')).address, /^src\/greet\.ts:3:\d+$/);
+    index.projects.refreshFile(file);
+    buildIndex(root, host, index.projects, index.store);
+    assert.match((await index.resolver.resolve('greet')).address, /^src\/greet\.ts:3:\d+$/);
+    index.store.close();
   } finally { close(session, host, temp); }
 });
 

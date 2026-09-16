@@ -3,34 +3,11 @@ import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { DeclarationError, DeclarationResolver } from '../src/core/declarations.js';
+import { DeclarationError } from '../src/core/declarations.js';
 import { declarationError } from '../src/commands/handlers.js';
 import { completionCode } from '../src/output.js';
-import { SourceReader } from '../src/core/source.js';
 import { ProjectRegistry } from '../src/server/projects.js';
 import { TsServerSession } from '../src/server/tsserver.js';
-
-test('tsserver bootstrap retains its document and canonicalizes declaration and usage addresses', async () => {
-  const temp = mkdtempSync(path.join(tmpdir(), 'tsym-project-'));
-  const root = path.join(temp, 'fixture');
-  cpSync('test/fixture', root, { recursive: true });
-  const session = new TsServerSession(root);
-  try {
-    const projects = new ProjectRegistry(root, session);
-    await projects.bootstrap();
-    assert.equal(projects.records().length, 1);
-    const resolver = new DeclarationResolver(root, session, projects, new SourceReader(session.location.path));
-    const declaration = await resolver.resolve('greet');
-    const usage = await resolver.resolve('src/main.ts:3:1');
-    const module = await resolver.resolve('src/greet.ts:0:0');
-    assert.equal(declaration.address, 'src/greet.ts:2:17');
-    assert.equal(usage.address, 'src/app.ts:5:17');
-    assert.equal(module.address, 'src/greet.ts:0:0');
-  } finally {
-    session.stop();
-    rmSync(temp, { recursive: true, force: true });
-  }
-});
 
 test('geterrForProject resolves on its requestCompleted event with every diagnostic event collected, then frees the request slot', async () => {
   const temp = mkdtempSync(path.join(tmpdir(), 'tsym-geterr-'));
@@ -122,27 +99,4 @@ test('a resolver rejection inside a handler becomes an exit-2 invocation error, 
   const missing = declarationError(new DeclarationError('no-such-path', 'nope does not exist.'), invocation);
   assert.equal(missing.problems[0].expected, 'an existing file or directory under --root');
   assert.match(missing.problems[0].next!, /tsym show -h/);
-});
-
-test('a bare name with several navto candidates is resolved one request at a time and reports the candidates', async () => {
-  const temp = mkdtempSync(path.join(tmpdir(), 'tsym-ambiguous-'));
-  const root = path.join(temp, 'fixture');
-  cpSync('test/fixture', root, { recursive: true });
-  writeFileSync(path.join(root, 'src', 'dup-a.ts'), 'export const dup = 1;\n');
-  writeFileSync(path.join(root, 'src', 'dup-b.ts'), 'export const dup = 2;\n');
-  const session = new TsServerSession(root);
-  try {
-    const projects = new ProjectRegistry(root, session);
-    await projects.bootstrap();
-    const resolver = new DeclarationResolver(root, session, projects, new SourceReader(session.location.path));
-    await assert.rejects(resolver.resolve('dup'), (error: unknown) => {
-      assert.ok(error instanceof DeclarationError, `expected DeclarationError, got ${String(error)}`);
-      assert.equal(error.code, 'ambiguous-symbol');
-      assert.deepEqual(error.candidates.sort(), ['src/dup-a.ts:1:14', 'src/dup-b.ts:1:14']);
-      return true;
-    });
-  } finally {
-    session.stop();
-    rmSync(temp, { recursive: true, force: true });
-  }
 });

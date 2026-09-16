@@ -28,9 +28,10 @@ export class DeclarationResolver {
     }
     this.validatePosition(address, file);
     const relativeFile = relative(this.root, file);
-    const declarations = this.rows(`MATCH (d:Declaration) WHERE d.file = $file AND d.line = $line AND d.col = $col RETURN ${columns()}`, { file: relativeFile, line: address.line, col: address.col });
+    const declarations = this.rows(`MATCH (d:Declaration) WHERE d.file = $file AND d.line = $line AND d.col <= $col AND $col < d.col + size(d.name) RETURN ${columns()}`, { file: relativeFile, line: address.line, col: address.col });
     const references = declarations.length === 0
-      ? this.rows(`MATCH (owner:Declaration)-[r:REFERENCES]->(d:Declaration) WHERE owner.file = $file AND r.line = $line AND r.col = $col RETURN ${columns()}`, { file: relativeFile, line: address.line, col: address.col })
+      ? this.rows(`MATCH (owner:Declaration)-[r:REFERENCES]->(d:Declaration) WHERE owner.file = $file AND r.line = $line AND r.col <= $col RETURN ${columns()}, r.col AS referenceCol`, { file: relativeFile, line: address.line, col: address.col })
+        .filter((row) => address.col < number(row, 'referenceCol') + identifierLengthAt(this.source.read(file), address.line, number(row, 'referenceCol')))
       : [];
     const records = unique([...declarations, ...references].map((row) => this.record(row)));
     if (records.length === 0) {
@@ -44,8 +45,9 @@ export class DeclarationResolver {
   async resolveName(name: string): Promise<DeclarationRecord> {
     const qualified = name.includes('.');
     const declarations = this.rows(`MATCH (d:Declaration) WHERE d.${qualified ? 'qname' : 'name'} = $name RETURN ${columns()}`, { name })
-      .filter((row) => text(row, 'name') !== '<module>' && (qualified || !text(row, 'qname').includes('.')));
-    const aliases = qualified ? [] : this.rows(`MATCH (:Declaration)-[e:EXPORTS]->(d:Declaration) WHERE e.name = $name RETURN ${columns()}`, { name });
+      .filter((row) => text(row, 'name') !== '<module>' && (qualified || text(row, 'container').endsWith('#<module>')));
+    const aliases = qualified ? [] : this.rows(`MATCH (:Declaration)-[e:EXPORTS]->(d:Declaration) WHERE e.name = $name RETURN ${columns()}`, { name })
+      .filter((row) => text(row, 'container').endsWith('#<module>'));
     const normalized = unique([...declarations, ...aliases].map((row) => this.record(row)));
     if (normalized.length === 0) throw new DeclarationError('unresolvable-symbol', `No declaration matches ${name}`);
     if (normalized.length > 1) throw new DeclarationError('ambiguous-symbol', `${name} is ambiguous`, normalized.map((item) => item.address));
@@ -67,11 +69,12 @@ export class DeclarationResolver {
     const location = { path: text(row, 'file'), line: number(row, 'line'), col: number(row, 'col') };
     const file = path.join(this.root, location.path);
     const source = this.source.read(file);
+    const name = location.line === 0 ? path.basename(file) : text(row, 'name');
     const nameStart = location.line === 0 ? 0 : offsetAt(source, location.line, location.col);
     const startLine = location.line === 0 ? 1 : number(row, 'endLine') - number(row, 'lines') + 1;
     const start = location.line === 0 ? 0 : offsetAt(source, startLine, 1);
     const end = location.line === 0 ? source.length : offsetAt(source, number(row, 'endLine') + 1, 1);
-    return { address: inputAddress(location), location, file, kind: text(row, 'kind'), name: text(row, 'name'), qualifiedName: text(row, 'qname'), nameSpan: { start: nameStart, end: nameStart + text(row, 'name').length }, span: { start, end } };
+    return { address: inputAddress(location), location, file, kind: text(row, 'kind'), name, qualifiedName: location.line === 0 ? name : text(row, 'qname'), nameSpan: { start: nameStart, end: nameStart + name.length }, span: { start, end } };
   }
 
   private validatePosition(address: DeclarationAddress, file: string): void {
@@ -86,8 +89,9 @@ function parseAddress(value: string): DeclarationAddress | null { const match = 
 function inputAddress(address: DeclarationAddress): string { return `${address.path}:${address.line}:${address.col}`; }
 function relative(root: string, file: string): string { return path.relative(root, file).split(path.sep).join('/'); }
 function offsetAt(source: string, line: number, col: number): number { const lines = source.split('\n'); return lines.slice(0, Math.max(0, line - 1)).reduce((offset, value) => offset + value.length + 1, 0) + Math.max(0, col - 1); }
+function identifierLengthAt(source: string, line: number, col: number): number { return /^(?:[$_\p{ID_Start}]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[$_\p{ID_Continue}\u200C\u200D]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})*/u.exec(source.slice(offsetAt(source, line, col)))?.[0].length ?? 0; }
 function addressAt(source: string, offset: number, file: string): DeclarationAddress { const before = source.slice(0, offset); return { path: file, line: before.split('\n').length, col: before.length - before.lastIndexOf('\n') }; }
 function text(row: StoreRow, key: string): string { return String(row[key] ?? ''); }
 function number(row: StoreRow, key: string): number { return Number(row[key]); }
 function unique(records: DeclarationRecord[]): DeclarationRecord[] { return [...new Map(records.map((record) => [record.address, record])).values()]; }
-function columns(): string { return 'd.at AS at, d.name AS name, d.qname AS qname, d.kind AS kind, d.file AS file, d.line AS line, d.col AS col, d.endLine AS endLine, d.lines AS lines'; }
+function columns(): string { return 'd.at AS at, d.name AS name, d.qname AS qname, d.kind AS kind, d.file AS file, d.line AS line, d.col AS col, d.endLine AS endLine, d.lines AS lines, d.container AS container'; }

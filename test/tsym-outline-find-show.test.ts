@@ -20,10 +20,10 @@ test('outline, find, and show use the resident compiler without opening outline 
     assert.equal(rows(outline.stdout).length, 6);
     assert.doesNotMatch(outline.stdout, /alias/);
     assert.match(outline.stdout, /src\/greet\.ts:2:17  function  export  greet  \(3L\)/);
-    assert.match(outline.stdout, /Greeter  \(11L, 5 members\)/);
+    assert.match(outline.stdout, /Greeter  \(11L, 4 members\)/);
 
     const members = run(root, cache, 'outline', 'src/greet.ts', '--members');
-    assert.equal(rows(members.stdout).length, 15);
+    assert.equal(rows(members.stdout).length, 14);
     assert.match(members.stdout, /Greeter\.say/);
 
     const directory = run(root, cache, 'outline', 'src', '--depth', '1');

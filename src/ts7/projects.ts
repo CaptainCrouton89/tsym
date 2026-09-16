@@ -22,7 +22,7 @@ export class ConfiguredProjects {
     for (const config of configs) {
       const project = projects.find((candidate) => path.resolve(candidate.configFileName) === config);
       if (!project) continue;
-      const files = new Set(project.program.getSourceFileNames().map((file) => path.resolve(file)).filter((file) => workspaceSourceFile(this.root, file)));
+      const files = new Set(project.rootFiles.map((file) => path.resolve(file)).filter((file) => workspaceSourceFile(this.root, file)));
       if (files.size === 0) continue;
       this.projects.set(config, { config, files, bootstrap: [...files].find((file) => sourceExtensions.has(path.extname(file))) ?? null });
     }
@@ -87,5 +87,5 @@ function statOrNull(file: string) {
 function workspaceSourceFile(root: string, file: string): boolean {
   if (!existsSync(file) || !sourceExtensions.has(path.extname(file))) return false;
   const relative = path.relative(root, file);
-  return relative !== '' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) && !relative.split(path.sep).includes('node_modules');
+  return relative !== '' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) && !relative.split(path.sep).some((part) => skipped.has(part));
 }
