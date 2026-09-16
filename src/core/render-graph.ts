@@ -22,6 +22,12 @@ export function renderGraph(graph: Graph): string {
     lines.push('  end');
   }
 
+  const connecting = graph.nodes.filter((node) => node.connecting);
+  if (connecting.length > 0) {
+    lines.push('  classDef connecting stroke-dasharray: 5 5');
+    lines.push(`  class ${connecting.map((node) => nodeId.get(node.id)).join(',')} connecting`);
+  }
+
   for (const edge of graph.edges) {
     const label = edge.callSites > 1 ? `|${edge.callSites}|` : '';
     lines.push(`  ${nodeId.get(edge.from)} -->${label} ${nodeId.get(edge.to)}`);

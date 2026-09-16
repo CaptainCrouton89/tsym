@@ -48,12 +48,14 @@ export async function trace(ws: Workspace, addresses: string | readonly string[]
     frontier = next;
   }
 
-  const filteredGraph = graphForItems({ nodes: [...nodes.values()], edges: [...edges.values()], unresolved }, opts);
-  const nodeIds = new Set(filteredGraph.nodes.map((node) => node.id));
-  const items = [...rows.values()].filter((row) => nodeIds.has(address(row))).sort(compareCallees);
+  const prunedGraph = graphAfterExclusion({ nodes: [...nodes.values()], edges: [...edges.values()], unresolved }, opts.exclude);
+  const remaining = new Set(prunedGraph.nodes.map((node) => node.id));
+  const items = [...rows.values()]
+    .filter((row) => remaining.has(address(row)) && matchesPathFilters(row.path, { in: opts.in }))
+    .sort(compareCallees);
   const finished = finish({ command: 'trace', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit }, items);
-  const graph = graphForItems(filteredGraph, {}, new Set(finished.items.map(address)));
-  finished.receipt.excluded = rows.size - items.length;
+  const graph = graphForItems(prunedGraph, new Set(finished.items.map(address)));
+  finished.receipt.excluded = rows.size - finished.items.length;
   finished.receipt.unresolved = graph.unresolved.length;
   return { ...finished, graph };
 }
@@ -77,29 +79,71 @@ export function addEdge(edges: Map<string, GraphEdge>, from: string, to: string,
   else edges.set(key, { from, to, callSites });
 }
 
-/** Apply path filters and a row limit, then retain only nodes connected to a surviving seed. */
-export function graphForItems(graph: Graph, filters: PathFilters = {}, itemIds?: ReadonlySet<string>): Graph {
-  const allowed = new Set(graph.nodes.filter((node) => matchesPathFilters(node.path, filters) && (itemIds === undefined || node.depth === 0 || itemIds.has(node.id))).map((node) => node.id));
-  const neighbors = new Map<string, string[]>();
-  for (const edge of graph.edges) {
-    if (!allowed.has(edge.from) || !allowed.has(edge.to)) continue;
-    const from = neighbors.get(edge.from) ?? [];
-    from.push(edge.to);
-    neighbors.set(edge.from, from);
-    const to = neighbors.get(edge.to) ?? [];
-    to.push(edge.from);
-    neighbors.set(edge.to, to);
-  }
+/** Remove excluded nodes, then retain only nodes still reachable from a surviving seed. */
+export function graphAfterExclusion(graph: Graph, exclude: PathFilters['exclude']): Graph {
+  const allowed = new Set(graph.nodes.filter((node) => matchesPathFilters(node.path, { exclude })).map((node) => node.id));
+  const { children } = traversalLinks(graph, allowed);
   const kept = new Set(graph.nodes.filter((node) => node.depth === 0 && allowed.has(node.id)).map((node) => node.id));
   const frontier = [...kept];
   for (let i = 0; i < frontier.length; i++) {
-    for (const neighbor of neighbors.get(frontier[i]!) ?? []) {
-      if (!kept.has(neighbor)) {
-        kept.add(neighbor);
-        frontier.push(neighbor);
+    for (const child of children.get(frontier[i]!) ?? []) {
+      if (!kept.has(child)) {
+        kept.add(child);
+        frontier.push(child);
       }
     }
   }
+  return selectGraph(graph, kept);
+}
+
+/** Keep returned rows, every seed, and the connecting paths between them. */
+export function graphForItems(graph: Graph, rowIds: ReadonlySet<string>): Graph {
+  const ids = new Set(graph.nodes.map((node) => node.id));
+  const { parents } = traversalLinks(graph, ids);
+  const kept = new Set(graph.nodes.filter((node) => node.depth === 0).map((node) => node.id));
+  const frontier = [...rowIds].filter((id) => ids.has(id));
+  for (let i = 0; i < frontier.length; i++) {
+    const id = frontier[i]!;
+    if (kept.has(id)) continue;
+    kept.add(id);
+    for (const parent of parents.get(id) ?? []) frontier.push(parent);
+  }
+  const selected = selectGraph(graph, kept);
+  return {
+    ...selected,
+    nodes: selected.nodes.map((node) => {
+      if (node.depth === 0 || rowIds.has(node.id)) {
+        const { connecting: _connecting, ...rowOrSeed } = node;
+        return rowOrSeed;
+      }
+      return { ...node, connecting: true };
+    }),
+  };
+}
+
+function traversalLinks(graph: Graph, allowed: ReadonlySet<string>): { children: Map<string, string[]>; parents: Map<string, string[]> } {
+  const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+  const children = new Map<string, string[]>();
+  const parents = new Map<string, string[]>();
+  const link = (parent: string, child: string): void => {
+    children.set(parent, [...(children.get(parent) ?? []), child]);
+    parents.set(child, [...(parents.get(child) ?? []), parent]);
+  };
+  for (const edge of graph.edges) {
+    if (!allowed.has(edge.from) || !allowed.has(edge.to)) continue;
+    const from = nodes.get(edge.from)!;
+    const to = nodes.get(edge.to)!;
+    if (from.depth < to.depth) link(edge.from, edge.to);
+    else if (to.depth < from.depth) link(edge.to, edge.from);
+    else {
+      link(edge.from, edge.to);
+      link(edge.to, edge.from);
+    }
+  }
+  return { children, parents };
+}
+
+function selectGraph(graph: Graph, kept: ReadonlySet<string>): Graph {
   return {
     nodes: graph.nodes.filter((node) => kept.has(node.id)),
     edges: graph.edges.filter((edge) => kept.has(edge.from) && kept.has(edge.to)),

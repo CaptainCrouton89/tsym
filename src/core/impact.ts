@@ -1,9 +1,9 @@
 import { Node } from 'ts-morph';
 import { callersOf } from './callers.js';
-import { finish, type PathFilters } from './receipt.js';
+import { finish, matchesPathFilters, type PathFilters } from './receipt.js';
 import { asAddresses, resolveSymbol, uniqueSymbols, type ResolveOptions } from './symbols.js';
 import { lineTextAt, locOf, nameIdentifier, referencesTo, type NameNode } from './ts-program.js';
-import { addEdge, address, graphForItems, graphNodeFromSymbol } from './trace.js';
+import { addEdge, address, graphAfterExclusion, graphForItems, graphNodeFromSymbol } from './trace.js';
 import type { Caller, GraphEdge, GraphNode, Result } from './types.js';
 import type { Workspace } from './workspace.js';
 
@@ -70,12 +70,15 @@ export async function impact(ws: Workspace, addresses: string | readonly string[
     }
   }
 
-  const filteredGraph = graphForItems({ nodes: [...nodes.values()], edges: [...edges.values()], unresolved: [] }, opts);
-  const nodeIds = new Set(filteredGraph.nodes.map((node) => node.id));
-  const items = [...rows.values()].filter((row) => nodeIds.has(key(row))).sort(compareCallers);
+  const prunedGraph = graphAfterExclusion({ nodes: [...nodes.values()], edges: [...edges.values()], unresolved: [] }, opts.exclude);
+  const remaining = new Set(prunedGraph.nodes.map((node) => node.id));
+  const items = [...rows.values()]
+    .filter((row) => remaining.has(key(row)) && matchesPathFilters(row.path, { in: opts.in }))
+    .sort(compareCallers);
   const finished = finish({ command: 'impact', query: inputs.join(' '), root: ws.root, engine: 'ts-morph', filesScanned: Math.max(...symbols.map((symbol) => ws.projectFor(symbol.path).getSourceFiles().length)), startedAt, limit: opts.limit }, items);
-  const graph = graphForItems(filteredGraph, {}, new Set(finished.items.map(key)));
-  finished.receipt.excluded = rows.size - items.length;
+  const graph = graphForItems(prunedGraph, new Set(finished.items.map(key)));
+  finished.receipt.excluded = rows.size - finished.items.length;
+  finished.receipt.unresolved = graph.unresolved.length;
   return { ...finished, graph };
 }
 

@@ -55,10 +55,40 @@ test('trace follows callees breadth-first, keeps the shallowest row, and records
 
   const limited = await ast.trace('run', { limit: 1 });
   assert.deepEqual(limited.items.map((item) => item.qualifiedName), ['greet']);
-  assert.deepEqual(limited.graph!.nodes.map((node) => node.qualifiedName), ['run', 'greet']);
+  assert.deepEqual(limited.graph!.nodes.map((node) => [node.qualifiedName, node.connecting]), [
+    ['run', undefined],
+    ['greet', undefined],
+    ['shout', true],
+    ['Greeter.say', true],
+  ]);
+  assertRowsMatchGraph(limited);
+  assertConnectedToSeed(limited.graph!);
   assert.equal(limited.receipt.unresolved, limited.graph!.unresolved.length);
 
   await assert.rejects(() => ast.trace([]), EmptySymbolList);
+});
+
+test('--in projects trace rows after traversal and retains connecting nodes', async () => {
+  const all = await ast.trace('src/removal.test.ts:0:0');
+  const filtered = await ast.trace('src/removal.test.ts:0:0', { in: 'src/app.ts' });
+  assert.deepEqual(all.items.map((item) => item.qualifiedName), ['bridgeToUnrelated', 'unrelated']);
+  assert.deepEqual(filtered.items.map((item) => item.qualifiedName), ['unrelated']);
+  assert.equal(filtered.receipt.excluded, all.items.length - filtered.items.length);
+  assert.deepEqual(
+    filtered.graph!.nodes.map((node) => [node.qualifiedName, node.connecting]),
+    [
+      ['src/removal.test.ts', undefined],
+      ['bridgeToUnrelated', true],
+      ['unrelated', undefined],
+    ],
+  );
+  assertRowsMatchGraph(filtered);
+  assertConnectedToSeed(filtered.graph!);
+  assert.equal(filtered.receipt.unresolved, filtered.graph!.unresolved.length);
+
+  const graph = renderGraph(filtered.graph!);
+  assert.match(graph, /classDef connecting stroke-dasharray: 5 5/);
+  assert.match(graph, /class n_[0-9a-f]+ connecting/);
 });
 
 test('renderGraph groups declarations by directory and shows unresolved edges', async () => {
@@ -70,3 +100,27 @@ test('renderGraph groups declarations by directory and shows unresolved edges', 
   assert.match(graph, /describe<br\/>src\/app\.ts:15:1/);
   assert.match(graph, /-.-> unresolved_dispatch/);
 });
+
+function assertRowsMatchGraph(result: Awaited<ReturnType<typeof ast.trace>>): void {
+  const graphRows = result.graph!.nodes.filter((node) => node.depth > 0 && !node.connecting).map((node) => node.id).sort();
+  assert.deepEqual(result.items.map((item) => `${item.path}:${item.start.line}:${item.start.col}`).sort(), graphRows);
+}
+
+function assertConnectedToSeed(graph: NonNullable<Awaited<ReturnType<typeof ast.trace>>['graph']>): void {
+  const neighbors = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    neighbors.set(edge.from, [...(neighbors.get(edge.from) ?? []), edge.to]);
+    neighbors.set(edge.to, [...(neighbors.get(edge.to) ?? []), edge.from]);
+  }
+  const seen = new Set(graph.nodes.filter((node) => node.depth === 0).map((node) => node.id));
+  const frontier = [...seen];
+  for (let i = 0; i < frontier.length; i++) {
+    for (const id of neighbors.get(frontier[i]!) ?? []) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        frontier.push(id);
+      }
+    }
+  }
+  assert.deepEqual(seen, new Set(graph.nodes.map((node) => node.id)));
+}

@@ -35,8 +35,8 @@ Every run prints a one-line receipt on stderr: items, files matched, files scann
 Only --limit N truncates a result. Exit 0 with items, 1 with none, 2 on a bad symbol or usage.
 
 Options
-  --in GLOB      restrict rows to paths matching GLOB or under directory GLOB (repeatable; every command)
-  --exclude GLOB remove rows matching GLOB or under directory GLOB (repeatable; every command; wins over --in)
+  --in GLOB      keep only rows under matching paths (repeatable; all commands; on trace/impact the graph keeps the connecting path)
+  --exclude GLOB remove matching paths and whatever is only reachable through them (repeatable; all commands; wins over --in)
   --kind KIND    ${SYMBOL_KINDS.join(' | ')}
   --path FILE    resolve a symbol name inside one file
   --depth N      impact/trace: levels of callers/callees to follow (default 3)

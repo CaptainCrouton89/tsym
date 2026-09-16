@@ -47,3 +47,5 @@ export function useBoth(): void {
 export function chained(text: string): string[] {
   return text.trim().split(' ');
 }
+
+

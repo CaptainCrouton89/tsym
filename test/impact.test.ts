@@ -31,7 +31,12 @@ test('impact follows callers transitively to the requested depth and lists re-ex
 
   const limited = await ast.impact('greet', { limit: 1 });
   assert.deepEqual(limited.items.map((item) => item.qualifiedName), ['run']);
-  assert.deepEqual(limited.graph!.nodes.map((node) => node.qualifiedName), ['greet', 'run']);
+  assert.deepEqual(limited.graph!.nodes.map((node) => [node.qualifiedName, node.connecting]), [
+    ['greet', undefined],
+    ['run', undefined],
+    ['shout', true],
+    ['Greeter.say', true],
+  ]);
 
   const filtered = await ast.impact('greet', { exclude: '**/*.test.ts' });
   assert.equal(filtered.receipt.excluded, 1);
@@ -46,6 +51,25 @@ test('impact follows callers transitively to the requested depth and lists re-ex
   assert.equal(multiple.graph!.nodes.filter((node) => node.depth === 0).length, 2);
   assert.ok(!multiple.items.some((item) => item.qualifiedName === 'shout'));
   assert.equal(new Set(multiple.items.map((item) => `${item.path}:${item.start.line}:${item.start.col}`)).size, multiple.items.length);
+});
+
+test('--in projects impact rows after traversal and retains connecting nodes', async () => {
+  const all = await ast.impact('unrelated');
+  const filtered = await ast.impact('unrelated', { in: 'src/removal.test.ts' });
+  assert.deepEqual(filtered.items.map((item) => item.qualifiedName), ['src/removal.test.ts']);
+  assert.equal(filtered.receipt.excluded, all.items.length - filtered.items.length);
+  assert.deepEqual(
+    filtered.graph!.nodes.map((node) => [node.qualifiedName, node.connecting]),
+    [
+      ['unrelated', undefined],
+      ['bridgeToUnrelated', true],
+      ['src/removal.test.ts', undefined],
+    ],
+  );
+  const graphRows = filtered.graph!.nodes.filter((node) => node.depth > 0 && !node.connecting).map((node) => node.id).sort();
+  assert.deepEqual(filtered.items.map((item) => `${item.path}:${item.start.line}:${item.start.col}`).sort(), graphRows);
+  assertConnectedToSeed(filtered.graph!);
+  assert.equal(filtered.receipt.unresolved, filtered.graph!.unresolved.length);
 });
 
 test('module graph nodes use an address that cannot collide with a declaration', async () => {

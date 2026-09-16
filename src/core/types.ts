@@ -96,6 +96,8 @@ export interface GraphNode {
   qualifiedName: string;
   /** 0 for a seed. */
   depth: number;
+  /** True when this node only connects a seed to a returned row. */
+  connecting?: true;
 }
 
 export interface GraphEdge {
