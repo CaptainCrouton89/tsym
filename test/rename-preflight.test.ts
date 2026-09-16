@@ -34,6 +34,11 @@ export class RenameMemberCollision {
 export const renameComputedTarget = 'key';
 export const renameComputedUse = { [renameComputedTarget]: 1 };
 
+export class RenameEscapedHolder {
+  renameEscapedTarget = 1;
+}
+export const renameEscapedUse = new RenameEscapedHolder()["renameEscaped\\u0054arget"];
+
 declare global {
   interface RenameOutsideMerged { local: string; }
 }
@@ -57,7 +62,8 @@ test('rename refuses computed names, external declarations, and name conflicts b
     const before = readFileSync(source);
     for (const rename of [
       { symbol: 'src/rename-preflight.ts:20:14', name: 'renamedComputed', code: 'rename-through-computed-name', site: 'src/rename-preflight.ts:21:37' },
-      { symbol: 'src/rename-preflight.ts:24:13', name: 'renamedOutside', code: 'rename-outside-workspace', site: 'src/rename-preflight.ts:24:13' },
+      { symbol: 'src/rename-preflight.ts:29:13', name: 'renamedOutside', code: 'rename-outside-workspace', site: 'src/rename-preflight.ts:29:13' },
+      { symbol: 'src/rename-preflight.ts:24:3', name: 'renamedEscaped', code: 'rename-through-string-literal', site: 'src/rename-preflight.ts:26:59' },
       { symbol: 'src/rename-preflight.ts:3:14', name: 'renamedShadow', code: 'rename-conflict', site: 'src/rename-preflight.ts:6:10' },
       { symbol: 'src/rename-preflight.ts:9:14', name: 'readFile', code: 'rename-conflict', site: 'src/rename-preflight.ts:9:14' },
       { symbol: 'src/rename-preflight.ts:15:3', name: 'renamedMember', code: 'rename-conflict', site: 'src/rename-preflight.ts:15:3' },

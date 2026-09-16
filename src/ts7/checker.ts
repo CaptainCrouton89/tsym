@@ -79,10 +79,14 @@ export function renameFromOccurrences(host: Ts7Host, root: string, projects: Con
     const target = unalias(project, renamed);
     assertWorkspaceDeclarations(root, project, target, declaration.address);
     assertNoStringLiteralRename(root, projects, snapshot, target, declaration.name);
+    const declarationSource = project.program.getSourceFile(declaration.file);
+    if (!declarationSource) throw new Error(`TypeScript could not load ${declaration.file} for rename.`);
+    const declarationPoint = declarationSource.getLineAndCharacterOfPosition(declaration.nameSpan.start);
+    const declarationOccurrence = { file: relative(root, declaration.file), line: declarationPoint.line + 1, col: declarationPoint.character + 1 };
 
     const edits = new Map<string, CheckerRenameEdit>();
     const sites = new Map<string, RenameOccurrence>();
-    for (const occurrence of [...occurrences, ...shapeOccurrences(root, projects, snapshot, target)]) sites.set(address(occurrence), occurrence);
+    for (const occurrence of [...occurrences, declarationOccurrence, ...shapeOccurrences(root, projects, snapshot, target)]) sites.set(address(occurrence), occurrence);
     for (const occurrence of sites.values()) {
       const file = path.resolve(root, occurrence.file);
       const membership = projects.membership(file);
@@ -95,6 +99,7 @@ export function renameFromOccurrences(host: Ts7Host, root: string, projects: Con
       const node = nodeAt(source, position);
       if (!node || !ts.isIdentifier(node)) throw new Error(`The indexed rename site ${address(occurrence)} is not an identifier in the current program.`);
       if (hasComputedName(node)) throw new RenamePreflightError('rename-through-computed-name', address(occurrence), `Cannot rename through computed property name at ${address(occurrence)}.`);
+      if (isExplicitImportAliasLocal(siteProject, file, node)) continue;
       const expected = symbolForRenameNode(siteProject, file, node);
       if (!expected || !sameSymbol(siteProject, expected, target)) throw new Error(`The indexed rename site ${address(occurrence)} no longer resolves to ${declaration.address}.`);
       if (isExportAlias(node)) continue;
@@ -103,9 +108,6 @@ export function renameFromOccurrences(host: Ts7Host, root: string, projects: Con
       edits.set(`${occurrence.file}:${edit.startUtf16}:${edit.endUtf16}`, { ...occurrence, ...edit });
     }
 
-    const declarationSource = project.program.getSourceFile(declaration.file);
-    const declarationNode = declarationSource && nodeAt(declarationSource, declaration.nameSpan.start);
-    if (declarationNode) assertNoConflict(project, target, newName, declarationNode, declaration.address);
     return [...edits.values()].sort((left, right) => left.file.localeCompare(right.file) || left.startUtf16 - right.startUtf16 || left.endUtf16 - right.endUtf16);
   });
 }
@@ -124,7 +126,7 @@ function assertNoStringLiteralRename(root: string, projects: ConfiguredProjects,
     for (const file of scope.files) {
       const source = project.program.getSourceFile(file);
       if (!source) continue;
-      const string = firstStringElementAccess(source, (node) => node.argumentExpression.getText(source) === `'${name}'` || node.argumentExpression.getText(source) === `\"${name}\"`, (argument) => {
+      const string = firstStringElementAccess(source, (node) => node.text === name, (argument) => {
         const symbol = symbolAt(project, file, argument.getStart(source));
         return !!symbol && sameSymbol(project, symbol, target);
       });
@@ -185,8 +187,8 @@ function shapeOccurrences(root: string, projects: ConfiguredProjects, snapshot: 
   return [...sites.values()];
 }
 
-function firstStringElementAccess(node: Node, namesSymbol: (node: ts.ElementAccessExpression) => boolean, matches: (argument: Node) => boolean): ts.StringLiteral | undefined {
-  if (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression) && namesSymbol(node) && matches(node.argumentExpression)) return node.argumentExpression;
+function firstStringElementAccess(node: Node, namesSymbol: (node: ts.StringLiteral) => boolean, matches: (argument: Node) => boolean): ts.StringLiteral | undefined {
+  if (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression) && namesSymbol(node.argumentExpression) && matches(node.argumentExpression)) return node.argumentExpression;
   let found: ts.StringLiteral | undefined;
   node.forEachChild((child) => { if (!found) found = firstStringElementAccess(child, namesSymbol, matches); });
   return found;
@@ -243,6 +245,15 @@ function destructuredProperty(project: Project, node: ts.Identifier): TsSymbol |
 
 function isExportAlias(node: ts.Identifier): boolean { return ts.isExportSpecifier(node.parent) && node.parent.propertyName !== undefined && node.parent.name === node; }
 
+function isExplicitImportAliasLocal(project: Project, file: string, node: ts.Identifier): boolean {
+  const symbol = symbolAt(project, file, node.getStart(node.getSourceFile()));
+  if (!symbol || !(symbol.flags & SymbolFlags.Alias)) return false;
+  return symbol.declarations.some((handle) => {
+    const declaration = handle.resolve(project);
+    return !!declaration && ts.isImportSpecifier(declaration) && declaration.propertyName !== undefined;
+  });
+}
+
 function editForNode(project: Project, source: ts.SourceFile, node: ts.Identifier, target: TsSymbol, newName: string): Pick<CheckerRenameEdit, 'startUtf16' | 'endUtf16' | 'oldText' | 'replacement'> {
   const parent = node.parent;
   const oldText = node.getText(source);
@@ -276,7 +287,7 @@ function unalias(project: Project, symbol: TsSymbol): TsSymbol { return symbol.f
 function sameSymbol(project: Project, left: TsSymbol, right: TsSymbol): boolean {
   const resolvedLeft = unalias(project, left);
   const resolvedRight = unalias(project, right);
-  return resolvedLeft.id === resolvedRight.id || resolvedLeft.declarations.some((leftDeclaration) => resolvedRight.declarations.some((rightDeclaration) => leftDeclaration.path === rightDeclaration.path && leftDeclaration.index === rightDeclaration.index));
+  return resolvedLeft.id !== 0 && resolvedLeft.id === resolvedRight.id || resolvedLeft.declarations.some((leftDeclaration) => resolvedRight.declarations.some((rightDeclaration) => leftDeclaration.path === rightDeclaration.path && leftDeclaration.index === rightDeclaration.index));
 }
 function address(site: RenameOccurrence): string { return `${site.file}:${site.line}:${site.col}`; }
 

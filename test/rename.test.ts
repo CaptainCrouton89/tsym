@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { chmod, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -34,6 +34,10 @@ test('rename previews shorthand without writing and refuses string-literal eleme
   try {
     const shorthand = path.join(fixture.root, 'src/rename-shorthand.ts');
     const stringLiteral = path.join(fixture.root, 'src/rename-string-literal.ts');
+    const aliasSource = path.join(fixture.root, 'src', 'rename-alias-source.ts');
+    const aliasConsumer = path.join(fixture.root, 'src', 'rename-alias-consumer.ts');
+    writeFileSync(aliasSource, 'export const renameAliasedPublic = 1;\n');
+    writeFileSync(aliasConsumer, "import { renameAliasedPublic as localAlias } from './rename-alias-source.js';\nexport const aliasValue = localAlias;\n");
     const before = new Map([[shorthand, readFileSync(shorthand)], [stringLiteral, readFileSync(stringLiteral)]]);
 
     const preview = run(fixture.root, fixture.cache, 'rename', 'renameShorthandValue', 'renamedShorthandValue');
@@ -56,9 +60,15 @@ test('rename previews shorthand without writing and refuses string-literal eleme
     const applied = run(fixture.root, fixture.cache, 'rename', 'renameShorthandValue', 'renamedShorthandValue', '--apply');
     assert.equal(applied.status, 0, applied.stderr);
     assert.match(applied.stdout, /applied="true"/);
+    assert.match(readFileSync(shorthand, 'utf8'), /export const renamedShorthandValue = 1/);
     assert.match(readFileSync(shorthand, 'utf8'), /renameShorthandValue: renamedShorthandValue/);
     assert.match(readFileSync(shorthand, 'utf8'), /renameEmojiPrefix = '😀'/);
     assert.deepEqual(readFileSync(stringLiteral), before.get(stringLiteral));
+
+    const alias = run(fixture.root, fixture.cache, 'rename', 'src/rename-alias-source.ts:1:14', 'renamedAliasedPublic', '--apply');
+    assert.equal(alias.status, 0, alias.stderr);
+    assert.equal(readFileSync(aliasSource, 'utf8'), 'export const renamedAliasedPublic = 1;\n');
+    assert.equal(readFileSync(aliasConsumer, 'utf8'), "import { renamedAliasedPublic as localAlias } from './rename-alias-source.js';\nexport const aliasValue = localAlias;\n");
 
     const invalid = run(fixture.root, fixture.cache, 'rename', 'renameShorthandValue', 'bad-name');
     assert.equal(invalid.status, 2, invalid.stderr);
