@@ -25,7 +25,7 @@ const handler: SemanticHandler = async (context, invocation) => {
       files.push({ file, source, symbols: readSymbols(context.root, file, await navtree(context, file), source) });
     } catch (error) {
       if (!(error instanceof TsServerError) || !error.message.includes('No Project')) throw error;
-      if (explicitFiles.has(file)) throw new DeclarationError('not-in-program', `${path.relative(context.root, file).split(path.sep).join('/')} exists but is not part of a TypeScript project under ${context.root}.`);
+      if (explicitFiles.has(file)) throw new DeclarationError('not-in-program', `${path.relative(context.root, file).split(path.sep).join('/')} exists but is not part of a TypeScript project under ${context.root}`);
       scope.notInProgram++;
     }
   }

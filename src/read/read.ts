@@ -73,16 +73,16 @@ export async function scopeFiles(context: SemanticContext, cwd: string, inputs: 
     if (existsSync(absolute)) {
       const stat = statSync(absolute);
       if (stat.isFile()) {
-        if (!extensions.has(path.extname(absolute))) throw new DeclarationError('not-in-program', `${input} is not a TypeScript-family source file.`);
+        if (!extensions.has(path.extname(absolute))) throw new DeclarationError('not-in-program', `${input} is not a TypeScript-family source file`);
         const membership = await context.projects.membership(absolute);
-        if (!membership) throw new DeclarationError('not-in-program', `${input} exists but is not part of a TypeScript project under ${context.root}.`);
+        if (!membership) throw new DeclarationError('not-in-program', `${input} exists but is not part of a TypeScript project under ${context.root}`);
         selected.add(displayPath(context.root, absolute));
       } else if (stat.isDirectory()) {
         for (const file of listed) if (rel === '' || file === rel || file.startsWith(`${rel.replace(/\/$/, '')}/`)) selected.add(file);
       }
     } else if (glob) {
       for (const file of listed) if (workspace.files(rel).includes(file)) selected.add(file);
-    } else throw new DeclarationError('no-such-path', `${input} does not exist.`);
+    } else throw new DeclarationError('no-such-path', `${input} does not exist`);
   }
   let notInProgram = 0;
   const files: string[] = [];
@@ -104,7 +104,7 @@ export function declarationSpans(tree: NavtreeItem, record: DeclarationRecord): 
     for (const child of item.childItems ?? []) visit(child);
   };
   visit(tree);
-  if (!found.length) throw new DeclarationError('unresolvable-symbol', `No declaration span contains ${record.address}.`);
+  if (!found.length) throw new DeclarationError('unresolvable-symbol', `No declaration span contains ${record.address}`);
   return found.sort((a, b) => a.start.line - b.start.line || a.start.offset - b.start.offset);
 }
 

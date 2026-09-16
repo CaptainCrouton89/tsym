@@ -52,8 +52,8 @@ async function resolve(context: SemanticContext, input: string): Promise<Declara
     if (!records.some((record) => record.address === resolved.address)) records.push(resolved);
   }
   if (records.length === 1) return records[0]!;
-  if (records.length === 0) throw new DeclarationError('unresolvable-symbol', `No declaration matches ${input}.`);
-  throw new DeclarationError('ambiguous-symbol', `${input} is ambiguous.`, records.map((record) => record.address));
+  if (records.length === 0) throw new DeclarationError('unresolvable-symbol', `No declaration matches ${input}`);
+  throw new DeclarationError('ambiguous-symbol', `${input} is ambiguous`, records.map((record) => record.address));
 }
 
 function validateAddress(context: SemanticContext, input: string): void {
@@ -64,7 +64,7 @@ function validateAddress(context: SemanticContext, input: string): void {
   const line = Number(match[2]);
   const column = Number(match[3]);
   const content = context.source.read(file).split('\n');
-  if (line < 1 || column < 1 || line > content.length || column > content[line - 1]!.length + 1) throw new DeclarationError('invalid-address', `${input} is outside the source text.`);
+  if (line < 1 || column < 1 || line > content.length || column > content[line - 1]!.length + 1) throw new DeclarationError('invalid-address', `${input} is outside the source text`);
 }
 
 export default handler;

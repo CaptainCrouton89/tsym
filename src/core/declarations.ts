@@ -19,16 +19,16 @@ export class DeclarationResolver {
 
   async resolveAddress(address: DeclarationAddress): Promise<DeclarationRecord> {
     const file = path.resolve(this.root, address.path);
-    if (!existsSync(file)) throw new DeclarationError('no-such-path', `${address.path} does not exist.`);
+    if (!existsSync(file)) throw new DeclarationError('no-such-path', `${address.path} does not exist`);
     const project = await this.projects.membership(file);
-    if (!project) throw new DeclarationError('not-in-program', `${address.path} exists but is not part of a TypeScript project under ${this.root}.`);
+    if (!project) throw new DeclarationError('not-in-program', `${address.path} exists but is not part of a TypeScript project under ${this.root}`);
     if (address.line === 0 && address.col === 0) return this.fromSyntax(file, this.source.module(file));
-    if (address.line === 0 || address.col === 0) throw new DeclarationError('invalid-address', `${inputAddress(address)} mixes zero module coordinates with a source position.`);
+    if (address.line === 0 || address.col === 0) throw new DeclarationError('invalid-address', `${inputAddress(address)} mixes zero module coordinates with a source position`);
     const body = await this.session.definition({ file, line: address.line, offset: address.col });
     const definitions = definitionFiles(body);
     const normalized = unique(await Promise.all(definitions.map((definition) => this.fromFileSpan(definition))));
-    if (normalized.length === 0) throw new DeclarationError('unresolvable-symbol', `${inputAddress(address)} does not resolve to a declaration.`);
-    if (normalized.length > 1) throw new DeclarationError('ambiguous-symbol', `${inputAddress(address)} resolves to several declarations.`, normalized.map((item) => item.address));
+    if (normalized.length === 0) throw new DeclarationError('unresolvable-symbol', `${inputAddress(address)} does not resolve to a declaration`);
+    if (normalized.length > 1) throw new DeclarationError('ambiguous-symbol', `${inputAddress(address)} resolves to several declarations`, normalized.map((item) => item.address));
     return normalized[0]!;
   }
 
@@ -44,8 +44,8 @@ export class DeclarationResolver {
       records.push(await this.resolveAddress({ path: relative(this.root, file), line: item.start.line, col: item.start.offset }));
     }
     const normalized = unique(records);
-    if (normalized.length === 0) throw new DeclarationError('unresolvable-symbol', `No declaration matches ${name}.`);
-    if (normalized.length > 1) throw new DeclarationError('ambiguous-symbol', `${name} is ambiguous.`, normalized.map((item) => item.address));
+    if (normalized.length === 0) throw new DeclarationError('unresolvable-symbol', `No declaration matches ${name}`);
+    if (normalized.length > 1) throw new DeclarationError('ambiguous-symbol', `${name} is ambiguous`, normalized.map((item) => item.address));
     return normalized[0]!;
   }
 
@@ -62,7 +62,7 @@ export class DeclarationResolver {
 interface FileSpan { file: string; start: { line: number; offset: number }; end?: { line: number; offset: number }; }
 interface NavtoItem extends FileSpan { name: string; containerName?: string; }
 function definitionFiles(body: unknown): FileSpan[] { return Array.isArray((body as { definitions?: unknown })?.definitions) ? (body as { definitions: FileSpan[] }).definitions : []; }
-function requireDeclaration(value: SyntaxDeclaration | null, file: string): SyntaxDeclaration { if (!value) throw new DeclarationError('unresolvable-symbol', `TypeScript returned a location in ${file} that has no named declaration.`); return value; }
+function requireDeclaration(value: SyntaxDeclaration | null, file: string): SyntaxDeclaration { if (!value) throw new DeclarationError('unresolvable-symbol', `TypeScript returned a location in ${file} that has no named declaration`); return value; }
 function parseAddress(value: string): DeclarationAddress | null { const match = /^(.*):(\d+):(\d+)$/.exec(value); return match ? { path: match[1]!, line: Number(match[2]), col: Number(match[3]) } : null; }
 function inputAddress(address: DeclarationAddress): string { return `${address.path}:${address.line}:${address.col}`; }
 function relative(root: string, file: string): string { return path.relative(root, file).split(path.sep).join('/'); }
