@@ -1,6 +1,5 @@
 import path from 'node:path';
 import { matchesPathFilters } from '../../core/receipt.js';
-import { DeclarationError } from '../../core/declarations.js';
 import { escapeText, xml } from '../../output.js';
 import type { RenameEdit, RenameFilePlan, RenamePlan } from '../rename-apply.js';
 import type { Answer, InvocationError } from '../types.js';
@@ -22,9 +21,9 @@ const handler: SemanticHandler = async (context, invocation) => {
   const [input, newName] = invocation.input.args;
   if (!input || !newName) return invalid('rename needs a symbol and a replacement identifier.', input ?? 'none', 'exactly two values: <symbol> <newName>');
 
+  await context.projects.bootstrap();
+  const declaration = await context.resolver.resolve(input);
   try {
-    await context.projects.bootstrap();
-    const declaration = await context.resolver.resolve(input);
     const response = await context.session.withOpen(declaration.file, async () => {
       const result = await context.session.request('rename', {
         file: declaration.file,
@@ -54,7 +53,6 @@ const handler: SemanticHandler = async (context, invocation) => {
     };
     return answer;
   } catch (error) {
-    if (error instanceof DeclarationError) return invalid(error.message, input, 'one resolvable declaration address or name');
     return { category: 'tool', code: 'typescript-error', message: `TypeScript could not prepare this rename: ${message(error)}.`, received: input, expected: 'compiler-provided rename locations', next: 'Read server status and retry after repairing the workspace.' };
   }
 };
@@ -101,7 +99,7 @@ function renderFile(file: RenameFilePlan): string {
 }
 
 function strings(value: boolean | number | string | string[] | undefined): string[] | undefined { return Array.isArray(value) ? value : undefined; }
-function invalid(message: string, received: string, expected: string): never { return { category: 'invocation', code: 'cannot-rename', problems: [{ field: '<symbol>', received, expected: `${expected}; ${message}`, next: 'Choose a symbol TypeScript can rename, then retry.' }] } as never; }
+function invalid(message: string, received: string, expected: string): InvocationError { return { category: 'invocation', code: 'cannot-rename', problems: [{ field: '<symbol>', received, expected: `${expected}; ${message}`, next: 'Choose a symbol TypeScript can rename, then retry.' }] }; }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
 export default handler;
