@@ -26,6 +26,7 @@ class Worker extends Parent implements Contract {
   base(): void {}
 }
 function invoke(value: Contract): void { value.work(); }
+function invokeConcrete(value: Worker): void { value.work(); }
 export
   async function spread(): Promise<void> {
 }
@@ -46,9 +47,11 @@ test('build persists heritage edges, dispatch calls, and a null module container
     assert.equal(built.receipt.dispatchCalls, 1);
     assert.equal(query(store, "MATCH (d:Declaration {kind: 'module'}) RETURN d.container AS container")[0]?.container, null);
     assert.equal(query(store, 'MATCH (:Declaration)-[r:CALLS {dispatch: true}]->() RETURN count(r) AS count')[0]?.count, 1);
+    const concreteCall = query(store, "MATCH (caller:Declaration {name: 'invokeConcrete'})-[r:CALLS {dispatch: false}]->(callee:Declaration {name: 'work'}) RETURN caller.key AS caller, callee.key AS callee, r.dispatch AS dispatch")[0];
+    assert.deepEqual(concreteCall, { caller: 'src/index.ts#invokeConcrete', callee: 'src/index.ts#Worker.work', dispatch: false });
     assert.equal(query(store, 'MATCH (:Declaration)-[r:IMPORTS]->() RETURN r.names AS names')[0]?.names, 'one, two as second');
     const spread = query(store, "MATCH (d:Declaration {name: 'spread'}) RETURN d.line AS line, d.endLine AS endLine, d.lines AS lines")[0]!;
-    assert.deepEqual(spread, { line: 14, endLine: 15, lines: 3 });
+    assert.deepEqual(spread, { line: 15, endLine: 16, lines: 3 });
   } finally {
     store.close();
     program.close();
