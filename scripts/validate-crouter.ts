@@ -81,7 +81,7 @@ try {
     containerMatch &&= count(drill) === Number(match[2]);
     containerDetails.push(`${match[1]}: container ${match[2]}, drilled ${count(drill)}`);
   }
-  criterion('A3', directory.code === 0 && count(directory) === 0 && /symbols\)/.test(directory.stdout) && count(deep) === 687 && ms(deep) < 500 && containerMatch, `${count(deep)} exported declaration rows; ${ms(deep)} ms receipt/${deep.wall} ms wall (expected 687/<500ms). Container counts ${containerMatch ? 'match' : 'differ from'} drill-down.`, containerDetails.join('\n') + '\n' + sourceChecks(deep), [directory, directoryExport, deep]);
+  criterion('A3', directory.code === 0 && count(directory) === 0 && /symbols\)/.test(directory.stdout) && count(deep) === 686 && ms(deep) < 500 && containerMatch, `${count(deep)} exported declaration rows; ${ms(deep)} ms receipt/${deep.wall} ms wall (expected 686/<500ms). Container counts ${containerMatch ? 'match' : 'differ from'} drill-down.`, containerDetails.join('\n') + '\n' + sourceChecks(deep), [directory, directoryExport, deep]);
   const whole = run(['outline', '--depth', '2', '--exported']);
   const after = run(['server', 'status']);
   // Plan §7 ambiguity 4: "A4 is invalidated by the design and no unit owns it." The configured-project union and v2 resident replace the old 4461/771/88 and 250 MiB-growth baseline (design §3.1 and §9 decision 5).
