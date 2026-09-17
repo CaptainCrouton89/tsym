@@ -54,5 +54,5 @@ export function removeEndpoint(paths: ServerPaths): void {
 export function idleSeconds(): number {
   const configured = process.env.TSYM_IDLE_SECONDS;
   if (configured !== undefined && /^\d+$/.test(configured)) return Number(configured);
-  return 900;
+  return 14_400;
 }
