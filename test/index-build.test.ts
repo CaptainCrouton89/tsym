@@ -66,3 +66,43 @@ test('build persists heritage edges, dispatch calls, and a null module container
     cleanup();
   }
 });
+
+function coverageFixture(): { root: string; cleanup: () => void } {
+  const root = mkdtempSync(path.join(tmpdir(), 'tsym-index-coverage-'));
+  mkdirSync(path.join(root, 'src'));
+  mkdirSync(path.join(root, 'packages', 'shared', 'dist'), { recursive: true });
+  writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', strict: true, baseUrl: '.', paths: { '@/*': ['src/*'], '@shared/*': ['packages/shared/dist/*'], '@other/*': ['packages/shared/dist/*'] } }, include: ['src/**/*.ts'] }));
+  writeFileSync(path.join(root, 'src', 'service.ts'), '// leading comment\nexport class Service { constructor() {} }\n');
+  writeFileSync(path.join(root, 'src', 'barrel.ts'), '// leading comment\nexport { Service } from \'./service.js\';\n');
+  writeFileSync(path.join(root, 'src', 'controller.ts'), 'import { Service } from \'./service.js\';\nexport class Controller { constructor(private readonly service: Service) {} }\n');
+  writeFileSync(path.join(root, 'packages', 'shared', 'dist', 'index.d.ts'), 'export interface Shared { value: string }\nexport declare function helper(): void;\n');
+  writeFileSync(path.join(root, 'src', 'imports.ts'), 'import { Service } from \'@/barrel.js\';\nimport type { Service as TypeService } from \'./service.js\';\nimport type { Shared } from \'@shared/index.js\';\nimport type { Shared as OtherShared } from \'@other/index.js\';\nimport { helper } from \'@shared/index.js\';\nimport { readFile } from \'node:fs\';\nexport const value: TypeService = new Service();\nhelper();\nvoid readFile;\nvoid ({} as Shared);\nvoid ({} as OtherShared);\n');
+  return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+test('build targets an explicit-constructor class and every resolved import module', () => {
+  const { root, cleanup } = coverageFixture();
+  const program = new Ts7Host(root);
+  const projects = new ConfiguredProjects(root, program);
+  const store = new Store(path.join(root, 'store'));
+  try {
+    projects.load();
+    buildIndex(root, program, projects, store);
+    const classKey = 'src/service.ts#Service';
+    const constructorKey = 'src/service.ts#Service.constructor';
+    assert.equal(query(store, `MATCH ()-[r:REFERENCES]->(target:Declaration {key: '${classKey}'}) RETURN count(r) AS count`)[0]?.count, 9);
+    assert.equal(query(store, `MATCH ()-[r:TYPE_MENTION]->(target:Declaration {key: '${classKey}'}) RETURN count(r) AS count`)[0]?.count, 2);
+    assert.equal(query(store, `MATCH ()-[r:REFERENCES|TYPE_MENTION]->(target:Declaration {key: '${constructorKey}'}) RETURN count(r) AS count`)[0]?.count, 0);
+    const imports = query(store, "MATCH (:Declaration {key: 'src/imports.ts#<module>'})-[r:IMPORTS]->(target) RETURN target.key AS key ORDER BY r.line").map((row) => row.key);
+    assert.deepEqual(imports, ['src/barrel.ts#<module>', 'src/service.ts#<module>', '@shared#<module>', '@other#<module>', '@shared#<module>', 'node:fs#<module>']);
+    assert.deepEqual(query(store, "MATCH (:Declaration {key: 'src/controller.ts#<module>'})-[:IMPORTS]->(target) RETURN target.key AS key")[0], { key: 'src/service.ts#<module>' });
+    assert.equal(query(store, "MATCH ()-[r:REFERENCES]->(:External {key: '@shared#Shared'}) RETURN count(r) AS count")[0]?.count, 2);
+    assert.equal(query(store, "MATCH ()-[r:TYPE_MENTION]->(:External {key: '@shared#Shared'}) RETURN count(r) AS count")[0]?.count, 1);
+    assert.equal(query(store, "MATCH ()-[r:CALLS]->(:External {key: '@shared#helper'}) RETURN count(r) AS count")[0]?.count, 1);
+    assert.equal(query(store, "MATCH ()-[r:TYPE_MENTION]->(:External {key: '@other#Shared'}) RETURN count(r) AS count")[0]?.count, 1);
+  } finally {
+    store.close();
+    program.close();
+    cleanup();
+  }
+});
