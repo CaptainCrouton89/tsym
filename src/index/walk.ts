@@ -357,6 +357,8 @@ function declarationKind(descriptor: KeyedDeclaration, node: ts.Node | undefined
     case 'Constructor': return 'constructor';
     case 'VariableDeclaration':
     case 'BindingElement': return variableKind(node);
+    case 'FunctionExpression':
+    case 'ArrowFunction': return 'function';
     default: return descriptor.scope === 'module' ? 'module' : 'property';
   }
 }
@@ -381,9 +383,11 @@ function variableKind(node: ts.Node | undefined): 'const' | 'let' | 'var' {
 function isExported(node: ts.Node): boolean {
   if ((node as ts.Node & { modifiers?: readonly ts.Node[] }).modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) return true;
   if (ts.isExportAssignment(node)) return true;
-  let current: ts.Node | undefined = node.parent;
-  while (current && !ts.isVariableStatement(current) && !ts.isSourceFile(current)) current = current.parent;
-  return !!current && ts.isVariableStatement(current) && (current as ts.Node & { modifiers?: readonly ts.Node[] }).modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) === true;
+  // Only a variable's own statement can export it; a loop variable or a nested local inside an exported statement is not exported.
+  let current: ts.Node = node;
+  while (ts.isBindingElement(current) || ts.isObjectBindingPattern(current) || ts.isArrayBindingPattern(current) || ts.isVariableDeclaration(current)) current = current.parent;
+  const statement = ts.isVariableDeclarationList(current) ? current.parent : undefined;
+  return !!statement && ts.isVariableStatement(statement) && (statement as ts.Node & { modifiers?: readonly ts.Node[] }).modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) === true;
 }
 
 function callCallee(node: ts.Node): ts.Node | null {

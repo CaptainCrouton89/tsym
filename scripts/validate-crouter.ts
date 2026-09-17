@@ -85,7 +85,7 @@ try {
   const whole = run(['outline', '--depth', '2', '--exported']);
   const after = run(['server', 'status']);
   // Plan §7 ambiguity 4: "A4 is invalidated by the design and no unit owns it." The configured-project union and v2 resident replace the old 4461/771/88 and 250 MiB-growth baseline (design §3.1 and §9 decision 5).
-  criterion('A4', whole.code === 0 && Number(attr(whole.stdout, 'symbols')) === 4698 && Number(attr(whole.stdout, 'files')) === 1050 && /19 not in program/.test(whole.stderr) && ms(whole) < 4000, `${attr(whole.stdout, 'symbols')} exported symbols (${count(whole)} printed declaration rows)/${attr(whole.stdout, 'files')} files; ${whole.stderr.trim()}. RSS baseline ${baselineMemory}, after ${attr(after.stdout, 'memory')}. Expected 4698/1050, 19 not in program and <4s.`, sourceChecks(whole), [baseline, whole, after]);
+  criterion('A4', whole.code === 0 && Number(attr(whole.stdout, 'symbols')) === 4631 && Number(attr(whole.stdout, 'files')) === 1050 && /19 not in program/.test(whole.stderr) && ms(whole) < 4000, `${attr(whole.stdout, 'symbols')} exported symbols (${count(whole)} printed declaration rows)/${attr(whole.stdout, 'files')} files; ${whole.stderr.trim()}. RSS baseline ${baselineMemory}, after ${attr(after.stdout, 'memory')}. Expected 4631/1050, 19 not in program and <4s.`, sourceChecks(whole), [baseline, whole, after]);
   const functions = run(['outline', '--kind', 'function', 'src/core/runtime/revive.ts']);
   const limit = run(['outline', '--limit', '3', 'src/core/runtime/revive.ts']);
   const uncappedGraph = run(['inspect', 'reviveNode', '--graph', '--only', 'callers', '--each', '0']);

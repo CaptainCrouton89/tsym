@@ -108,6 +108,36 @@ test('build indexes variable-destructuring leaves but not parameter leaves', () 
   }
 });
 
+test('nested locals inside an exported statement are not exported, and anonymous callbacks are functions', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'tsym-index-nested-'));
+  mkdirSync(path.join(root, 'src'));
+  writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'ES2022', strict: true }, include: ['src/**/*.ts'] }));
+  writeFileSync(path.join(root, 'src', 'nested.ts'), [
+    'export const leaf = (items: readonly [string, number][]) => {',
+    '  for (const [name, count] of items) { void name; void count; }',
+    '  return items.filter((item) => Boolean(item[1]));',
+    '};',
+  ].join('\n'));
+  const program = new Ts7Host(root);
+  const projects = new ConfiguredProjects(root, program);
+  const store = new Store(path.join(root, 'store'));
+  try {
+    projects.load();
+    buildIndex(root, program, projects, store);
+    const rows = query(store, "MATCH (d:Declaration) WHERE d.file = 'src/nested.ts' AND d.kind <> 'module' RETURN d.qname AS qname, d.kind AS kind, d.exported AS exported ORDER BY d.qname");
+    assert.deepEqual(rows, [
+      { qname: 'leaf', kind: 'const', exported: true },
+      { qname: 'leaf.<items.filter#arg1:1>', kind: 'function', exported: false },
+      { qname: 'leaf.<loop:1>.count', kind: 'const', exported: false },
+      { qname: 'leaf.<loop:1>.name', kind: 'const', exported: false },
+    ]);
+  } finally {
+    store.close();
+    program.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function coverageFixture(): { root: string; cleanup: () => void } {
   const root = mkdtempSync(path.join(tmpdir(), 'tsym-index-coverage-'));
   mkdirSync(path.join(root, 'src'));
