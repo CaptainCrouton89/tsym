@@ -340,6 +340,7 @@ async function main(): Promise<void> {
         ingestCommits(root, store!, [commit]);
         writeMetadata(store!.path, metadataFor(root, configured, commit, refreshed.built.receipt.durationMs));
       }
+      append(paths, `index refresh stored=${refreshed.stored} changedFiles=${refreshed.changedFiles.length} duration=${Math.round(refreshed.built.receipt.durationMs)}ms`);
       return { indexedAt: indexedAt(root), state: 'current', built: refreshed.built };
     });
     if (batch.full) watcher?.refresh();

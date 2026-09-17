@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { buildIndex, type BuiltIndex } from '../src/index/build.js';
-import { fileFingerprint, graphsEqual, refreshIndex } from '../src/index/refresh.js';
+import { fileFingerprint, graphFingerprint, graphsEqual, refreshIndex } from '../src/index/refresh.js';
 import { IndexStateController, type IndexSnapshot } from '../src/index/state.js';
 import { watchIndex, type WatchBatch } from '../src/index/watch.js';
+import { readGraph } from '../src/store/load.js';
+import { readMetadata } from '../src/store/meta.js';
 import { Store } from '../src/store/store.js';
 import { Ts7Host } from '../src/ts7/api.js';
 import { ConfiguredProjects } from '../src/ts7/projects.js';
@@ -81,7 +83,7 @@ test('conservative refresh matches a full rebuild for each spike edit', () => {
   exercise(() => ({ file: 'src/hub.ts', text: 'export function renamed(value: number): number { return value; }\n' }), ['src/hub.ts', 'src/api/index.ts', 'src/daemon/manage.ts']);
 });
 
-test('a tsconfig change reloads project membership and uses a full store rebuild', () => {
+test('a full refresh with an unchanged graph skips the store write and updates metadata', () => {
   const { root, write, cleanup } = fixture();
   const program = new Ts7Host(root);
   const projects = new ConfiguredProjects(root, program);
@@ -89,16 +91,53 @@ test('a tsconfig change reloads project membership and uses a full store rebuild
   try {
     projects.load();
     const initial = buildIndex(root, program, projects, store);
-    write('src/hub.ts', 'export function hub(value: number): number { return value + 1; }\n');
-    const targeted = refreshIndex(root, program, projects, store, initial, { fileChanges: { changed: [path.join(root, 'src', 'hub.ts')] }, validate: true });
-    write('src/added.ts', 'export const added = true;\n');
-    rmSync(path.join(root, 'src', 'leaf.ts'));
-    write('tsconfig.json', JSON.stringify({ compilerOptions: { target: 'ES2022', strict: true, noUncheckedIndexedAccess: true }, include: ['src/**/*.ts'], exclude: ['src/leaf.ts'] }));
-    const refreshed = refreshIndex(root, program, projects, store, targeted.built, { fileChanges: { changed: [path.join(root, 'tsconfig.json')], created: [path.join(root, 'src', 'added.ts')], deleted: [path.join(root, 'src', 'leaf.ts')] }, full: true, validate: true });
-    assert.equal(refreshed.full, true);
+    const beforeGraph = graphFingerprint(readGraph(store));
+    const beforeMetadata = readMetadata(store.path)!;
+    write('tsconfig.json', JSON.stringify({ compilerOptions: { target: 'ES2022', strict: true, noUnusedLocals: true }, include: ['src/**/*.ts'] }));
+    const refreshed = refreshIndex(root, program, projects, store, initial, { fileChanges: { changed: [path.join(root, 'tsconfig.json')] }, full: true, validate: true });
+    const afterMetadata = readMetadata(store.path)!;
+    assert.equal(refreshed.stored, 'none');
     assert.equal(refreshed.validation, 'matched');
-    assert.ok(refreshed.built.graph.files.has('src/added.ts'));
-    assert.ok(!refreshed.built.graph.files.has('src/leaf.ts'));
+    assert.equal(graphFingerprint(readGraph(store)), beforeGraph);
+    assert.notEqual(afterMetadata.configHashes['tsconfig.json'], beforeMetadata.configHashes['tsconfig.json']);
+  } finally {
+    store.close();
+    program.close();
+    cleanup();
+  }
+});
+
+test('a full refresh rewrites the store when one file changes', () => {
+  const { root, write, cleanup } = fixture();
+  const program = new Ts7Host(root);
+  const projects = new ConfiguredProjects(root, program);
+  const store = new Store(path.join(root, 'store'));
+  try {
+    projects.load();
+    const initial = buildIndex(root, program, projects, store);
+    write('src/leaf.ts', 'export function leaf(): number { return 1; }\nexport const added = leaf();\n');
+    const refreshed = refreshIndex(root, program, projects, store, initial, { fileChanges: { changed: [path.join(root, 'src', 'leaf.ts')] }, full: true, validate: true });
+    assert.equal(refreshed.stored, 'full');
+    assert.ok(readGraph(store).declarations.some((declaration) => declaration.file === 'src/leaf.ts' && declaration.name === 'added'));
+  } finally {
+    store.close();
+    program.close();
+    cleanup();
+  }
+});
+
+test('a config exclusion rewrites the store and removes its file declarations', () => {
+  const { root, write, cleanup } = fixture();
+  const program = new Ts7Host(root);
+  const projects = new ConfiguredProjects(root, program);
+  const store = new Store(path.join(root, 'store'));
+  try {
+    projects.load();
+    const initial = buildIndex(root, program, projects, store);
+    write('tsconfig.json', JSON.stringify({ compilerOptions: { target: 'ES2022', strict: true }, include: ['src/**/*.ts'], exclude: ['src/leaf.ts'] }));
+    const refreshed = refreshIndex(root, program, projects, store, initial, { fileChanges: { changed: [path.join(root, 'tsconfig.json')] }, full: true, validate: true });
+    assert.equal(refreshed.stored, 'full');
+    assert.ok(!readGraph(store).declarations.some((declaration) => declaration.file === 'src/leaf.ts'));
   } finally {
     store.close();
     program.close();

@@ -17,7 +17,7 @@ export interface RefreshOptions {
 export interface RefreshResult {
   built: BuiltIndex;
   changedFiles: readonly string[];
-  full: boolean;
+  stored: 'full' | 'files' | 'none';
   validation: 'off' | 'matched';
 }
 
@@ -30,9 +30,14 @@ export function refreshIndex(root: string, program: Ts7Host, projects: Configure
   const candidate = indexGraph(root, program, projects);
   const graph = storeGraph(candidate);
   const changedFiles = differingFiles(previous, candidate);
-  const full = options.full === true;
-  if (full) loadGraph(store, graph);
-  else if (changedFiles.length > 0) replaceFiles(store, changedFiles, fileGraph(graph, changedFiles));
+  let stored: RefreshResult['stored'] = 'none';
+  if (options.full && changedFiles.length > 0) {
+    loadGraph(store, graph);
+    stored = 'full';
+  } else if (changedFiles.length > 0) {
+    replaceFiles(store, changedFiles, fileGraph(graph, changedFiles));
+    stored = 'files';
+  }
   const durationMs = performance.now() - started;
   writeMetadata(store.path, metadataFor(root, projects, headCommit(root), durationMs));
 
@@ -43,7 +48,7 @@ export function refreshIndex(root: string, program: Ts7Host, projects: Configure
     validation = 'matched';
   }
 
-  return { built: built(candidate, graph, durationMs), changedFiles, full, validation };
+  return { built: built(candidate, graph, durationMs), changedFiles, stored, validation };
 }
 
 export function graphsEqual(left: HeritageGraph, right: HeritageGraph): boolean {
@@ -108,7 +113,7 @@ function receiptFor(graph: StoreGraph): LoadReceipt {
   return { declarations: graph.declarations.length, externals: graph.externals.length, commits: graph.commits?.length ?? 0, relationships };
 }
 
-function graphFingerprint(graph: StoreGraph): string {
+export function graphFingerprint(graph: StoreGraph): string {
   const commits = graph.commits === undefined ? '' : `,"commits":[${serializedRows(graph.commits).join(',')}]`;
   return `{"declarations":[${serializedRows(graph.declarations).join(',')}],"externals":[${serializedRows(graph.externals).join(',')}]${commits},"relationships":[${serializedRows(graph.relationships).join(',')}]}`;
 }
