@@ -147,7 +147,7 @@ export function describeSourceFile(source: ts.SourceFile, file = source.fileName
     } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
       push(node.name.text, ts.isCatchClause(node.parent) ? 'excluded' : topOrFunctionLocal(node));
     } else if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) {
-      push(node.name.text, 'excluded');
+      push(node.name.text, bindingElementScope(node));
     } else if (ts.isParameter(node) && ts.isIdentifier(node.name)) {
       if (ts.isParameterPropertyDeclaration(node, node.parent)) push(node.name.text, 'named-member', path.slice(0, -1));
       else push(node.name.text, 'excluded');
@@ -233,6 +233,14 @@ function isNamelessLiteral(node: ts.Node, parentNamed: boolean, alreadyNameless:
 
 function isTypeAnnotation(parent: ts.Node, node: ts.Node): boolean {
   return 'type' in parent && parent.type === node && !ts.isTypeAliasDeclaration(parent) && ts.isTypeNode(node);
+}
+
+function bindingElementScope(node: ts.BindingElement): DescriptorScope {
+  for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
+    if (ts.isVariableDeclaration(current)) return ts.isCatchClause(current.parent) ? 'excluded' : topOrFunctionLocal(current);
+    if (ts.isParameter(current) || ts.isCatchClause(current)) return 'excluded';
+  }
+  return 'excluded';
 }
 
 function topOrFunctionLocal(node: ts.Node): DescriptorScope {

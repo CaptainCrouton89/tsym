@@ -67,6 +67,47 @@ test('build persists heritage edges, dispatch calls, and a null module container
   }
 });
 
+function bindingFixture(): { root: string; cleanup: () => void } {
+  const root = mkdtempSync(path.join(tmpdir(), 'tsym-index-bindings-'));
+  mkdirSync(path.join(root, 'src'));
+  writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'ES2022', strict: true }, include: ['src/**/*.ts'] }));
+  writeFileSync(path.join(root, 'src', 'bindings.ts'), [
+    'const api = { useX: () => 1 };',
+    'export const { useX } = api;',
+    'const useHook = () => [() => 2, { isLoading: true, remote: () => 3 }] as const;',
+    'export function View({ ignored }: { ignored: string }) {',
+    '  const [createOrg, { isLoading, remote: local }] = useHook();',
+    '  return useX() + createOrg() + (isLoading ? local() : 0) + ignored.length;',
+    '}',
+  ].join('\n'));
+  return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+test('build indexes variable-destructuring leaves but not parameter leaves', () => {
+  const { root, cleanup } = bindingFixture();
+  const program = new Ts7Host(root);
+  const projects = new ConfiguredProjects(root, program);
+  const store = new Store(path.join(root, 'store'));
+  try {
+    projects.load();
+    buildIndex(root, program, projects, store);
+    const declarations = query(store, "MATCH (d:Declaration) WHERE d.key IN ['src/bindings.ts#useX', 'src/bindings.ts#View.createOrg', 'src/bindings.ts#View.isLoading', 'src/bindings.ts#View.local'] RETURN d.key AS key, d.at AS at, d.kind AS kind, d.exported AS exported, d.container AS container ORDER BY d.key");
+    assert.deepEqual(declarations, [
+      { key: 'src/bindings.ts#View.createOrg', at: 'src/bindings.ts:5:10', kind: 'const', exported: false, container: 'src/bindings.ts#View' },
+      { key: 'src/bindings.ts#View.isLoading', at: 'src/bindings.ts:5:23', kind: 'const', exported: false, container: 'src/bindings.ts#View' },
+      { key: 'src/bindings.ts#View.local', at: 'src/bindings.ts:5:42', kind: 'const', exported: false, container: 'src/bindings.ts#View' },
+      { key: 'src/bindings.ts#useX', at: 'src/bindings.ts:2:16', kind: 'const', exported: true, container: 'src/bindings.ts#<module>' },
+    ]);
+    assert.equal(query(store, "MATCH (:Declaration {key: 'src/bindings.ts#View.ignored'}) RETURN count(*) AS count")[0]?.count, 0);
+    const calls = query(store, "MATCH (:Declaration {key: 'src/bindings.ts#View'})-[:CALLS]->(callee:Declaration) WHERE callee.key IN ['src/bindings.ts#useX', 'src/bindings.ts#View.createOrg', 'src/bindings.ts#View.local'] RETURN callee.key AS key ORDER BY key");
+    assert.deepEqual(calls, [{ key: 'src/bindings.ts#View.createOrg' }, { key: 'src/bindings.ts#View.local' }, { key: 'src/bindings.ts#useX' }]);
+  } finally {
+    store.close();
+    program.close();
+    cleanup();
+  }
+});
+
 function coverageFixture(): { root: string; cleanup: () => void } {
   const root = mkdtempSync(path.join(tmpdir(), 'tsym-index-coverage-'));
   mkdirSync(path.join(root, 'src'));

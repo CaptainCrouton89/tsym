@@ -14,6 +14,7 @@ test('outline, find, and show use the resident compiler without opening outline 
   cpSync('test/fixture', root, { recursive: true });
   writeFileSync(path.join(root, 'src/read-leaf-x&y.ts'), 'export const special = 1;\n');
   writeFileSync(path.join(root, 'src/read-leaf-nested.ts'), 'export namespace Outer { export namespace Inner { export function deep() {} } }\nexport const multi = 1, other = 2;\n');
+  writeFileSync(path.join(root, 'src/read-binding.ts'), 'const api = { useX: () => 1 };\nexport const { useX } = api;\nexport function View() { const [a] = useX(); return a(); }\n');
   try {
     const outline = run(root, cache, 'outline', 'src/greet.ts');
     assert.equal(outline.status, 0, outline.stderr);
@@ -40,6 +41,10 @@ test('outline, find, and show use the resident compiler without opening outline 
 
     const deeper = run(root, cache, 'outline', 'src', '--depth', '3');
     assert.match(deeper.stdout, /Greeter\.say/);
+    const bindings = run(root, cache, 'outline', 'src/read-binding.ts', '--depth', '2');
+    assert.equal(bindings.status, 0, bindings.stderr);
+    assert.match(bindings.stdout, /const  export  useX/);
+    assert.match(bindings.stdout, /const  View\.a/);
 
     const found = run(root, cache, 'find', 'greet');
     assert.equal(found.status, 0);

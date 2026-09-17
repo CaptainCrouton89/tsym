@@ -100,8 +100,7 @@ export function renameFromOccurrences(host: Ts7Host, root: string, projects: Con
       if (!node || !ts.isIdentifier(node)) throw new Error(`The indexed rename site ${address(occurrence)} is not an identifier in the current program.`);
       if (hasComputedName(node)) throw new RenamePreflightError('rename-through-computed-name', address(occurrence), `Cannot rename through computed property name at ${address(occurrence)}.`);
       if (isExplicitImportAliasLocal(siteProject, file, node)) continue;
-      const expected = symbolForRenameNode(siteProject, file, node);
-      if (!expected || !sameSymbol(siteProject, expected, target)) throw new Error(`The indexed rename site ${address(occurrence)} no longer resolves to ${declaration.address}.`);
+      if (!renameSymbols(siteProject, file, node).some((candidate) => sameSymbol(siteProject, candidate, target))) throw new Error(`The indexed rename site ${address(occurrence)} no longer resolves to ${declaration.address}.`);
       if (isExportAlias(node)) continue;
       assertNoConflict(siteProject, target, newName, node, address(occurrence));
       const edit = editForNode(siteProject, source, node, target, newName);
@@ -219,10 +218,15 @@ function conflict(project: Project, name: string, site: string, resolved: TsSymb
   return new RenamePreflightError('rename-conflict', site, `Cannot rename to ${name}: it resolves to ${unalias(project, resolved).name} at ${site}.`);
 }
 
-function symbolForRenameNode(project: Project, file: string, node: ts.Identifier): TsSymbol | undefined {
-  if (ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node) return project.checker.getShorthandAssignmentValueSymbol(node.parent);
-  if (ts.isExportSpecifier(node.parent)) return project.checker.getExportSpecifierLocalTargetSymbol(node.parent);
-  return contextualObjectProperty(project, node) ?? destructuredProperty(project, node) ?? symbolAt(project, file, node.getStart(node.getSourceFile()));
+function renameSymbols(project: Project, file: string, node: ts.Identifier): TsSymbol[] {
+  const symbols = [
+    ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node ? project.checker.getShorthandAssignmentValueSymbol(node.parent) : undefined,
+    ts.isExportSpecifier(node.parent) ? project.checker.getExportSpecifierLocalTargetSymbol(node.parent) : undefined,
+    contextualObjectProperty(project, node),
+    destructuredProperty(project, node),
+    symbolAt(project, file, node.getStart(node.getSourceFile())),
+  ];
+  return symbols.filter((symbol): symbol is TsSymbol => !!symbol);
 }
 
 function contextualObjectProperty(project: Project, node: ts.Identifier): TsSymbol | undefined {
@@ -261,7 +265,10 @@ function editForNode(project: Project, source: ts.SourceFile, node: ts.Identifie
     const value = project.checker.getShorthandAssignmentValueSymbol(parent);
     if (value) return { startUtf16: node.getStart(source), endUtf16: node.getEnd(), oldText, replacement: sameSymbol(project, value, target) ? `${oldText}: ${newName}` : `${newName}: ${oldText}` };
   }
-  if (ts.isBindingElement(parent) && parent.name === node && !parent.propertyName) return { startUtf16: node.getStart(source), endUtf16: node.getEnd(), oldText, replacement: `${newName}: ${oldText}` };
+  if (ts.isBindingElement(parent) && parent.name === node && !parent.propertyName && ts.isObjectBindingPattern(parent.parent)) {
+    const binding = symbolAt(project, source.fileName, node.getStart(source));
+    return { startUtf16: node.getStart(source), endUtf16: node.getEnd(), oldText, replacement: binding && sameSymbol(project, binding, target) ? `${oldText}: ${newName}` : `${newName}: ${oldText}` };
+  }
   if (ts.isExportSpecifier(parent)) {
     const local = project.checker.getExportSpecifierLocalTargetSymbol(parent);
     if (local && sameSymbol(project, local, symbolAt(project, source.fileName, node.getStart(source))!)) {

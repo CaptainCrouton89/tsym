@@ -268,7 +268,7 @@ function ownsSites(state: WalkFileState, descriptor: KeyedDeclaration): boolean 
   const node = state.nodesByStart.get(descriptor.start);
   if (!node) return true;
   if (ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isClassExpression(node)) return false;
-  if (!(ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node))) return true;
+  if (!(ts.isVariableDeclaration(node) || ts.isBindingElement(node) || ts.isPropertyDeclaration(node))) return true;
   const initializer = node.initializer;
   return !!initializer && (ts.isFunctionExpression(initializer) || ts.isArrowFunction(initializer) || ts.isClassExpression(initializer));
 }
@@ -355,7 +355,8 @@ function declarationKind(descriptor: KeyedDeclaration, node: ts.Node | undefined
     case 'GetAccessor': return 'getter';
     case 'SetAccessor': return 'setter';
     case 'Constructor': return 'constructor';
-    case 'VariableDeclaration': return variableKind(node);
+    case 'VariableDeclaration':
+    case 'BindingElement': return variableKind(node);
     default: return descriptor.scope === 'module' ? 'module' : 'property';
   }
 }
@@ -366,10 +367,14 @@ function parameterPropertyContainer(state: WalkFileState, descriptor: KeyedDecla
 }
 
 function variableKind(node: ts.Node | undefined): 'const' | 'let' | 'var' {
-  const parent = node?.parent;
-  const flags = parent && ts.isVariableDeclarationList(parent) ? parent.flags : 0;
-  if (flags & ts.NodeFlags.Const) return 'const';
-  if (flags & ts.NodeFlags.Let) return 'let';
+  for (let current = node; current; current = current.parent) {
+    if (!ts.isVariableDeclaration(current)) continue;
+    const parent = current.parent;
+    const flags = ts.isVariableDeclarationList(parent) ? parent.flags : 0;
+    if (flags & ts.NodeFlags.Const) return 'const';
+    if (flags & ts.NodeFlags.Let) return 'let';
+    return 'var';
+  }
   return 'var';
 }
 

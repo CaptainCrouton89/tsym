@@ -36,8 +36,10 @@ test('rename previews shorthand without writing and refuses string-literal eleme
     const stringLiteral = path.join(fixture.root, 'src/rename-string-literal.ts');
     const aliasSource = path.join(fixture.root, 'src', 'rename-alias-source.ts');
     const aliasConsumer = path.join(fixture.root, 'src', 'rename-alias-consumer.ts');
+    const bindingSource = path.join(fixture.root, 'src', 'rename-binding.ts');
     writeFileSync(aliasSource, 'export const renameAliasedPublic = 1;\n');
     writeFileSync(aliasConsumer, "import { renameAliasedPublic as localAlias } from './rename-alias-source.js';\nexport const aliasValue = localAlias;\n");
+    writeFileSync(bindingSource, 'const api = { useX: () => 1 };\nexport const { useX } = api;\nconst [tupleUseX] = [useX];\nuseX();\ntupleUseX();\n');
     const before = new Map([[shorthand, readFileSync(shorthand)], [stringLiteral, readFileSync(stringLiteral)]]);
 
     const preview = run(fixture.root, fixture.cache, 'rename', 'renameShorthandValue', 'renamedShorthandValue');
@@ -46,6 +48,16 @@ test('rename previews shorthand without writing and refuses string-literal eleme
     assert.match(preview.stdout, /renameShorthandValue → renameShorthandValue: renamedShorthandValue/);
     assert.deepEqual(readFileSync(shorthand), before.get(shorthand));
     assert.deepEqual(readFileSync(stringLiteral), before.get(stringLiteral));
+
+    const binding = run(fixture.root, fixture.cache, 'rename', 'useX', 'renamedUseX');
+    assert.equal(binding.status, 0, binding.stderr);
+    assert.match(binding.stdout, /useX → useX: renamedUseX/);
+    assert.match(binding.stdout, /useX → renamedUseX/);
+    assert.equal(readFileSync(bindingSource, 'utf8'), 'const api = { useX: () => 1 };\nexport const { useX } = api;\nconst [tupleUseX] = [useX];\nuseX();\ntupleUseX();\n');
+    const tupleBinding = run(fixture.root, fixture.cache, 'rename', 'tupleUseX', 'renamedTupleUseX');
+    assert.equal(tupleBinding.status, 0, tupleBinding.stderr);
+    assert.match(tupleBinding.stdout, /tupleUseX → renamedTupleUseX/);
+    assert.doesNotMatch(tupleBinding.stdout, /tupleUseX: renamedTupleUseX/);
 
     const stringPreview = run(fixture.root, fixture.cache, 'rename', 'src/rename-string-literal.ts:2:4', 'renamedStringValue');
     assert.equal(stringPreview.status, 2, stringPreview.stderr);

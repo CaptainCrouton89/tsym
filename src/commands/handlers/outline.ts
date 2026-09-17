@@ -65,7 +65,7 @@ function select(items: readonly Declaration[], flags: Record<string, boolean | n
   const out: Declaration[] = [];
   const visit = (item: Declaration, remaining: number) => {
     if (keep(item, flags)) out.push(item);
-    if (containers.has(item.kind) && (members || remaining > 1)) for (const child of byContainer.get(item.key) ?? []) visit(child, members ? remaining : remaining - 1);
+    if ((containers.has(item.kind) && (members || remaining > 1)) || (item.kind === 'function' && !members && remaining > 1)) for (const child of byContainer.get(item.key) ?? []) visit(child, members ? remaining : remaining - 1);
   };
   for (const item of roots) visit(item, depth);
   return out.sort(byPosition);
