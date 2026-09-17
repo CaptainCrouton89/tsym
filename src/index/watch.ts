@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, statSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
-import { discoverDirectories, skippedDirectories, type ConfiguredProjects } from '../ts7/projects.js';
+import { discoverDirectories, isProgramFileCandidate, skippedDirectories, type ConfiguredProjects } from '../ts7/projects.js';
 
 export interface WatchBatch {
   fileChanges: { changed?: string[]; created?: string[]; deleted?: string[] } | { invalidateAll: true };
@@ -48,8 +48,9 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
     if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || relative.split(path.sep).some((part) => skippedDirectories.has(part))) return;
     // fs.watch reports renames for a directory move and does not enumerate every moved child.
     if (isDirectory(file) || knownDirectories.has(file) || [...knownFiles].some((known) => known.startsWith(`${file}${path.sep}`))) { invalidate(); return; }
-    const configuration = path.basename(file) === 'tsconfig.json' || path.basename(file) === 'package.json';
     const known = knownFiles.has(file);
+    if (!known && !isProgramFileCandidate(file)) return;
+    const configuration = path.basename(file) === 'tsconfig.json' || path.basename(file) === 'package.json';
     // A membership change needs the full path, which resets knownFiles from the reloaded project records.
     if (existsSync(file)) record(file, known ? 'changed' : 'created', configuration || !known);
     else record(file, 'deleted', configuration || known);

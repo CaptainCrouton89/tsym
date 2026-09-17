@@ -4,7 +4,12 @@ import type { Project } from 'typescript/unstable/sync';
 import { Ts7Host } from './api.js';
 
 const sourceExtensions = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
-export const skippedDirectories: ReadonlySet<string> = new Set(['node_modules', '.git', 'dist', 'build', 'coverage']);
+export const skippedDirectories: ReadonlySet<string> = new Set(['node_modules', '.git', '.crouter', 'dist', 'build', 'coverage']);
+
+export function isProgramFileCandidate(file: string): boolean {
+  const basename = path.basename(file);
+  return sourceExtensions.has(path.extname(file)) || basename === 'tsconfig.json' || basename === 'package.json';
+}
 
 export interface ConfiguredProject { config: string; files: ReadonlySet<string>; bootstrap: string | null; }
 

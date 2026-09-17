@@ -257,7 +257,7 @@ test('deleting one of several configs keeps later refreshes working', () => {
   }
 });
 
-test('a created file and a rewritten config reach the refresh batch', async () => {
+test('watcher ignores non-program files and sends created files and rewritten configs to the refresh batch', async () => {
   const { root, write, cleanup } = fixture();
   const program = new Ts7Host(root);
   const projects = new ConfiguredProjects(root, program);
@@ -267,14 +267,22 @@ test('a created file and a rewritten config reach the refresh batch', async () =
   let stale = 0;
   let seen = () => {};
   const arrived = new Promise<void>((resolve) => { seen = resolve; });
-  const covered = () => batches.some((batch) => 'created' in batch.fileChanges && batch.fileChanges.created?.includes(path.join(root, 'src', 'added.ts')))
+  const source = path.join(root, 'src', 'zz.ts');
+  const covered = () => batches.some((batch) => 'created' in batch.fileChanges && batch.fileChanges.created?.includes(source))
     && batches.some((batch) => 'changed' in batch.fileChanges && batch.fileChanges.changed?.includes(path.join(root, 'tsconfig.json')));
   try {
     projects.load();
     const watcher = watchIndex(root, projects, async (batch) => { batches.push(batch); if (covered()) seen(); }, (error) => { throw error; }, () => { stale++; });
     try {
-      write('src/added.ts', 'export const added = true;\n');
-      write('tsconfig.json', JSON.stringify({ compilerOptions: { target: 'ES2022', strict: true }, include: ['src/added.ts'] }));
+      write('zz.txt', 'not source\n');
+      mkdirSync(path.join(root, '.crouter'));
+      write('.crouter/operations.db-wal', 'not source\n');
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      assert.deepEqual(batches, [], 'non-program files must not schedule a refresh');
+      assert.equal(stale, 0, 'non-program files must not mark the index stale');
+
+      write('src/zz.ts', 'export const added = true;\n');
+      write('tsconfig.json', JSON.stringify({ compilerOptions: { target: 'ES2022', strict: true }, include: ['src/zz.ts'] }));
       await Promise.race([arrived, new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`batches: ${JSON.stringify(batches)}`)), 5_000).unref())]);
     } finally { watcher.close(); }
     assert.ok(stale > 0, 'the watcher must mark the index stale before flushing');
