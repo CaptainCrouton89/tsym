@@ -41,6 +41,19 @@ test('CLI renders declaration-driven help and complete schema failures with one 
   assert.match(renamedFlag.stdout, /--each N/);
 });
 
+test('search reports an ast-grep pattern that does not parse as one node', () => {
+  const cache = mkdtempSync(path.join(tmpdir(), 'tsym-search-'));
+  try {
+    const result = runAt(path.resolve('test/fixture'), cache, 'search', 'foo<Bar>; baz', '--in', 'src/greet.ts');
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stdout, /<error code="invalid-pattern">/);
+    assert.match(result.stdout, /Multiple AST nodes are detected/);
+    assert.match(result.stdout, /foo&lt;Bar&gt;; baz/);
+  } finally {
+    rmSync(cache, { recursive: true, force: true });
+  }
+});
+
 test('CLI help reads the published index state without a resident socket', () => {
   const cache = mkdtempSync(path.join(tmpdir(), 'tsym-help-'));
   const root = path.resolve('test/fixture');

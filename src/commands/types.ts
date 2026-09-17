@@ -20,11 +20,17 @@ export interface Constraint {
   check(input: ParsedInput): ValidationProblem[];
 }
 
+export interface CommandError {
+  code: string;
+  description: string;
+}
+
 export interface CommandDeclaration {
   name: string;
   description: string;
   whenToUse?: string;
   model?: string;
+  errors?: readonly CommandError[];
   argument?: ArgumentDeclaration;
   flags?: readonly FlagDeclaration[];
   constraints?: readonly Constraint[];

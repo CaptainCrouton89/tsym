@@ -38,7 +38,10 @@ export function renderNode(node: OutputNode): string {
 }
 
 function renderInvocationError(error: InvocationError): string {
-  const body = error.problems.map((problem) => `${problem.field}: received ${problem.received}; expected ${problem.expected}.\nNext: ${problem.next ?? ''}`).join('\n');
+  const body = error.problems.map((problem) => {
+    const expected = problem.expected.endsWith('.') ? problem.expected : `${problem.expected}.`;
+    return `${escapeText(problem.field)}: received ${escapeText(problem.received)}; expected ${escapeText(expected)}\nNext: ${escapeText(problem.next ?? '')}`;
+  }).join('\n');
   return xml('error', { code: error.code }, body);
 }
 

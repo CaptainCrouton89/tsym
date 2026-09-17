@@ -81,7 +81,7 @@ function emit(completion: Completion, json: boolean): number {
 }
 
 main(process.argv.slice(2)).then((code) => process.exit(code), (error: unknown) => {
-  const completion: Completion = { category: 'tool', code: 'internal', message: 'tsym failed before completing the invocation.', next: 'Read the log from server status, then retry.' };
+  const completion: Completion = { category: 'tool', code: 'internal', message: error instanceof Error ? error.message : String(error) };
   const rendered = renderCompletion(completion, false);
   if (rendered.stdout) process.stdout.write(rendered.stdout);
   process.stderr.write(rendered.stderr.endsWith('\n') ? rendered.stderr : rendered.stderr + '\n');
