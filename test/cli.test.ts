@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
+// Help reads the resident's published state from the cache, so an isolated cache keeps a developer's live resident out of the assertion.
 function run(...args: string[]) {
-  return spawnSync(process.execPath, ['dist/cli.js', ...args], { cwd: process.cwd(), encoding: 'utf8' });
+  return spawnSync(process.execPath, ['dist/cli.js', ...args], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, XDG_CACHE_HOME: mkdtempSync(path.join(tmpdir(), 'tsym-cli-help-')) } });
 }
 
 function runAt(root: string, cache: string, ...args: string[]) {
