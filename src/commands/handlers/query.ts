@@ -7,7 +7,7 @@ import { pathsForRoot } from '../../server/lifecycle.js';
 import { ingestCommits } from '../../index/commits.js';
 import { query, type QueryParameters } from '../../store/query.js';
 import type { StoreRow } from '../../store/store.js';
-import type { Completion, Invocation, InvocationError } from '../types.js';
+import type { Completion, Invocation, InvocationError, ValidationProblem } from '../types.js';
 import type { SemanticHandler } from '../handlers.js';
 
 const address = /^(.*):(\d+):(\d+)$/;
@@ -67,15 +67,18 @@ const handler: SemanticHandler = async (context, invocation) => {
 
 function parametersFor(invocation: Invocation): { parameters: QueryParameters } | { error: InvocationError } {
   const values: QueryParameters = {};
+  const problems: ValidationProblem[] = [];
+  const problem = (received: string, expected: string, next: string) => problems.push({ field: '--param', received, expected, next });
   for (const raw of (invocation.input.flags['--param'] as string[] | undefined) ?? []) {
     const separator = raw.indexOf('=');
-    if (separator <= 0) return { error: rejected('--param', raw, 'NAME=VALUE', 'Name the Cypher parameter before `=`.') };
+    if (separator <= 0) { problem(raw, 'NAME=VALUE', 'Name the Cypher parameter before `=`.'); continue; }
     const name = raw.slice(0, separator);
-    if (!/^[_A-Za-z][_0-9A-Za-z]*$/.test(name)) return { error: rejected('--param', raw, 'NAME=VALUE with a Cypher parameter name', 'Use letters, digits, and underscores; the name cannot begin with a digit.') };
-    if (name in values) return { error: rejected('--param', raw, `one binding for $${name}`, 'Bind each parameter once.') };
-    if (name === 'commits' && invocation.input.flags['--since'] !== undefined) return { error: rejected('--param', raw, '$commits bound by --since', 'Remove --param commits or omit --since.') };
+    if (!/^[_A-Za-z][_0-9A-Za-z]*$/.test(name)) { problem(raw, 'NAME=VALUE with a Cypher parameter name', 'Use letters, digits, and underscores; the name cannot begin with a digit.'); continue; }
+    if (name in values) { problem(raw, `one binding for $${name}`, 'Bind each parameter once.'); continue; }
+    if (name === 'commits' && invocation.input.flags['--since'] !== undefined) { problem(raw, '$commits bound by --since', 'Remove --param commits or omit --since.'); continue; }
     values[name] = parseParameter(raw.slice(separator + 1));
   }
+  if (problems.length > 0) return { error: { category: 'invocation', code: 'query-rejected', problems } };
   return { parameters: values };
 }
 

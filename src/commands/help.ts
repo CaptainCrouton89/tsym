@@ -1,6 +1,6 @@
 import { xml, escapeText } from '../output.js';
 import { commandTree } from './tree.js';
-import type { CommandDeclaration, CommandError, FlagDeclaration } from './types.js';
+import type { CommandDeclaration, FlagDeclaration } from './types.js';
 
 export function renderHelp(node: CommandDeclaration, serverState = '<server state="stopped"/>'): string {
   const lines: string[] = [];
@@ -8,7 +8,6 @@ export function renderHelp(node: CommandDeclaration, serverState = '<server stat
   if (serverState && node !== commandTree && !node.state) lines.push(serverState);
   if (node.children) lines.push(...node.children.map((child) => `<subcommand name="${child.name}" description="${escapeText(child.description)}" whenToUse="${escapeText(child.whenToUse ?? '')}"/>`));
   if (node.argument || node.flags?.length) lines.push(`<input>\n${[node.argument ? argument(node.argument) : null, ...(node.flags ?? []).map(flag)].filter((line): line is string => line !== null).join('\n')}\n</input>`);
-  if (node.errors?.length) lines.push(`<errors>\n${node.errors.map(commandError).join('\n')}\n</errors>`);
   if (node.output) lines.push(`<output>${escapeText(node.output)}</output>`);
   if (node.effects) lines.push(`<effects>${escapeText(node.effects)}</effects>`);
   if (node === commandTree) {
@@ -19,7 +18,6 @@ export function renderHelp(node: CommandDeclaration, serverState = '<server stat
 }
 
 function argument(declaration: NonNullable<CommandDeclaration['argument']>): string { return `  <arg name="${declaration.name}" repeat="${declaration.repeat}">${escapeText(declaration.description)}</arg>`; }
-function commandError(error: CommandError): string { return `  <error code="${error.code}">${escapeText(error.description)}</error>`; }
 
 function flag(declaration: FlagDeclaration): string {
   const attrs = [`name="${declaration.name}"`, `type="${declaration.type}"`, declaration.repeat ? 'repeat="yes"' : null, declaration.default !== undefined ? `default="${declaration.default}"` : null].filter(Boolean).join(' ');
