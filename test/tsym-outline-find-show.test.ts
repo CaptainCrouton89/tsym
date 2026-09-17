@@ -34,6 +34,10 @@ test('outline, find, and show use the resident compiler without opening outline 
     assert.equal(directory.status, 0);
     assert.match(directory.stdout, /src\/greet\.ts  \(1 file, 6 symbols\)/);
     assert.doesNotMatch(directory.stdout, /src\/greet\.ts:2:17/);
+    const filteredDirectory = run(root, cache, 'outline', 'src', '--depth', '1', '--in', '**/greet.ts');
+    assert.match(filteredDirectory.stdout, /<outline path="src" depth="1" symbols="6" files="1" count="1">/);
+    assert.deepEqual(rows(filteredDirectory.stdout), ['src/greet.ts  (1 file, 6 symbols)']);
+
     const deeper = run(root, cache, 'outline', 'src', '--depth', '3');
     assert.match(deeper.stdout, /Greeter\.say/);
 

@@ -18,9 +18,9 @@ const handler: SemanticHandler = async (context, invocation) => {
   const flags = invocation.input.flags;
   const depth = flags['--depth'] as number;
   const scope = await scopeFiles(context, invocation.cwd, invocation.input.args);
-  const selected = new Set(scope.files.map((file) => displayPath(context.root, file)));
+  const selected = new Set(scope.files.map((file) => displayPath(context.root, file)).filter((file) => matchesPathFilters(file, { in: flags['--in'] as string[] | undefined, exclude: flags['--exclude'] as string[] | undefined })));
   const declarations = indexed(context).filter((declaration) => selected.has(declaration.path) && declaration.kind !== 'module');
-  const imports = flags['--imports'] === true && flags['--exported'] !== true && !flags['--kind'] ? indexedImports(context).filter((item) => selected.has(item.path) && matchesPathFilters(item.path, { in: flags['--in'] as string[] | undefined, exclude: flags['--exclude'] as string[] | undefined })) : [];
+  const imports = flags['--imports'] === true && flags['--exported'] !== true && !flags['--kind'] ? indexedImports(context).filter((item) => selected.has(item.path)) : [];
   const directory = invocation.input.args.length === 0 ? context.root : invocation.input.args.map((input) => path.resolve(invocation.cwd, input)).find((candidate) => {
     try { return statSync(candidate).isDirectory(); } catch { return false; }
   });
@@ -73,7 +73,7 @@ function select(items: readonly Declaration[], flags: Record<string, boolean | n
 
 function keep(item: Declaration, flags: Record<string, boolean | number | string | string[]>): boolean {
   const kinds = flags['--kind'] as string[] | undefined;
-  return (!kinds || kinds.includes(item.kind)) && (flags['--exported'] !== true || item.exported) && matchesPathFilters(item.path, { in: flags['--in'] as string[] | undefined, exclude: flags['--exclude'] as string[] | undefined });
+  return (!kinds || kinds.includes(item.kind)) && (flags['--exported'] !== true || item.exported);
 }
 
 function symbolRow(symbol: Declaration, items: readonly Declaration[], flags: Record<string, boolean | number | string | string[]>): Row {
