@@ -1,4 +1,4 @@
-import { DeclarationError, type DeclarationRecord } from '../../core/declarations.js';
+import { DeclarationError, DeclarationResolutionErrors, type DeclarationRecord } from '../../core/declarations.js';
 import { normalKind } from '../../read/read.js';
 import { typeAt } from '../../ts7/checker.js';
 import type { SemanticHandler } from '../handlers.js';
@@ -7,8 +7,7 @@ import type { ToolError } from '../types.js';
 const handler: SemanticHandler = async (context, invocation) => {
   try {
     await context.projects.bootstrap();
-    const declarations: DeclarationRecord[] = [];
-    for (const input of invocation.input.args) declarations.push(await context.resolver.resolve(input));
+    const declarations = await context.resolver.resolveAll(invocation.input.args);
     const includeDefinition = invocation.input.flags['--def'] === true;
     const symbols: Array<{ element: string; attributes: Record<string, string | undefined>; text?: string; children?: Array<{ element: string; attributes?: Record<string, string>; text: string }> }> = [];
     let answers = 0;
@@ -23,7 +22,7 @@ const handler: SemanticHandler = async (context, invocation) => {
 
     return { data: { element: 'type', children: symbols }, count: answers };
   } catch (error) {
-    if (error instanceof DeclarationError) throw error;
+    if (error instanceof DeclarationError || error instanceof DeclarationResolutionErrors) throw error;
     return failure(error);
   }
 };

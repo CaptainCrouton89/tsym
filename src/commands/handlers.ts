@@ -1,4 +1,4 @@
-import { DeclarationError } from '../core/declarations.js';
+import { DeclarationError, DeclarationResolutionErrors } from '../core/declarations.js';
 import type { SemanticContext } from '../server/context.js';
 import type { Completion, HandlerName, Invocation, InvocationError } from './types.js';
 
@@ -16,6 +16,7 @@ export async function executeSemantic(context: SemanticContext, invocation: Invo
     return await (await modules[handler]()).default(context, invocation);
   } catch (error) {
     if (error instanceof DeclarationError) return declarationError(error, invocation);
+    if (error instanceof DeclarationResolutionErrors) return declarationErrors(error, invocation);
     throw error;
   }
 }
@@ -26,6 +27,14 @@ export async function executeSemantic(context: SemanticContext, invocation: Invo
  * `InvocationError` themselves when they know a sharper field or next step.
  */
 export function declarationError(error: DeclarationError, invocation: Invocation): InvocationError {
+  return { category: 'invocation', code: error.code, problems: [declarationProblem(error, invocation)] };
+}
+
+function declarationErrors(errors: DeclarationResolutionErrors, invocation: Invocation): InvocationError {
+  return { category: 'invocation', code: errors.errors[0]!.code, problems: errors.errors.map((error) => declarationProblem(error, invocation)) };
+}
+
+function declarationProblem(error: DeclarationError, invocation: Invocation): InvocationError['problems'][number] {
   const leaf = `tsym ${invocation.path.join(' ')}`;
   const expected: Record<DeclarationError['code'], string> = {
     'no-such-path': 'an existing file or directory under --root',
@@ -37,5 +46,5 @@ export function declarationError(error: DeclarationError, invocation: Invocation
   const next = error.code === 'ambiguous-symbol' && error.candidates.length > 0
     ? `Pass one of: ${error.candidates.join(' ')}`
     : `Run \`${leaf} -h\` for the accepted input forms.`;
-  return { category: 'invocation', code: error.code, problems: [{ field: invocation.declaration.argument?.name ?? 'argument', received: error.message, expected: expected[error.code], next }] };
+  return { field: invocation.declaration.argument?.name ?? 'argument', received: error.message, expected: expected[error.code], next };
 }

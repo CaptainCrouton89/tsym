@@ -15,6 +15,17 @@ export class SourceReader {
     const source = this.parse(file);
     return declarationAt(this.tokenAt(source, source.getPositionOfLineAndCharacter(line - 1, offset - 1)), source);
   }
+  declarationNameSpanAt(file: string, line: number, offset: number): SourceSpan | null {
+    const source = this.parse(file);
+    const declaration = indexedDeclarationFor(this.tokenAt(source, source.getPositionOfLineAndCharacter(line - 1, offset - 1)));
+    const name = declaration && (declaration as ts.Declaration & { name?: ts.Node }).name;
+    return name ? { start: name.getStart(source), end: name.getEnd() } : null;
+  }
+  declarationSpanAt(file: string, line: number, offset: number): SourceSpan | null {
+    const source = this.parse(file);
+    const declaration = indexedDeclarationFor(this.tokenAt(source, source.getPositionOfLineAndCharacter(line - 1, offset - 1)));
+    return declaration ? { start: declaration.getStart(source), end: declaration.getEnd() } : null;
+  }
   declarationForSpan(file: string, start: { line: number; offset: number }): SyntaxDeclaration | null { return this.declarationAt(file, start.line, start.offset); }
   ownerForSpan(file: string, start: { line: number; offset: number }): SyntaxDeclaration {
     const source = this.parse(file);
@@ -52,6 +63,15 @@ function ownerAt(node: ts.Node, source: ts.SourceFile): SyntaxDeclaration | null
   while (current) {
     const declaration = declarationFor(current);
     if (declaration && namedCallable(declaration)) return describe(declaration, source);
+    current = current.parent;
+  }
+  return null;
+}
+
+function indexedDeclarationFor(node: ts.Node): ts.Node | null {
+  let current: ts.Node | undefined = node;
+  while (current) {
+    if (ts.isVariableDeclaration(current) || ts.isFunctionDeclaration(current) || ts.isFunctionExpression(current) || ts.isClassDeclaration(current) || ts.isClassExpression(current) || ts.isInterfaceDeclaration(current) || ts.isTypeAliasDeclaration(current) || ts.isEnumDeclaration(current) || ts.isModuleDeclaration(current) || ts.isMethodDeclaration(current) || current.kind === ts.SyntaxKind.MethodSignature || ts.isPropertyDeclaration(current) || current.kind === ts.SyntaxKind.PropertySignature || ts.isGetAccessorDeclaration(current) || ts.isSetAccessorDeclaration(current) || ts.isConstructorDeclaration(current) || ts.isParameterDeclaration(current) || ts.isBindingElement(current) || ts.isImportSpecifier(current) || ts.isExportSpecifier(current) || ts.isExportAssignment(current) || ts.isArrowFunction(current)) return current;
     current = current.parent;
   }
   return null;

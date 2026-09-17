@@ -7,6 +7,7 @@ import { SourceReader, type SyntaxDeclaration } from './source.js';
 export interface DeclarationAddress { path: string; line: number; col: number; }
 export interface DeclarationRecord { address: string; location: DeclarationAddress; file: string; kind: string; name: string; qualifiedName: string; nameSpan: { start: number; end: number }; span: { start: number; end: number }; }
 export class DeclarationError extends Error { constructor(readonly code: 'no-such-path' | 'not-in-program' | 'unresolvable-symbol' | 'ambiguous-symbol' | 'invalid-address', message: string, readonly candidates: string[] = []) { super(message); } }
+export class DeclarationResolutionErrors extends Error { constructor(readonly errors: readonly DeclarationError[]) { super(errors.map((error) => error.message).join('\n')); } }
 
 /** Resolves every declaration identity from the committed index. */
 export class DeclarationResolver {
@@ -15,6 +16,20 @@ export class DeclarationResolver {
   async resolve(input: string): Promise<DeclarationRecord> {
     const address = parseAddress(input);
     return address ? this.resolveAddress(address) : this.resolveName(input);
+  }
+
+  async resolveAll(inputs: readonly string[]): Promise<DeclarationRecord[]> {
+    const records: DeclarationRecord[] = [];
+    const errors: DeclarationError[] = [];
+    for (const input of inputs) {
+      try { records.push(await this.resolve(input)); }
+      catch (error) {
+        if (error instanceof DeclarationError) errors.push(error);
+        else throw error;
+      }
+    }
+    if (errors.length > 0) throw new DeclarationResolutionErrors(errors);
+    return records;
   }
 
   async resolveAddress(address: DeclarationAddress): Promise<DeclarationRecord> {
@@ -28,15 +43,31 @@ export class DeclarationResolver {
     }
     this.validatePosition(address, file);
     const relativeFile = relative(this.root, file);
-    const declarations = this.rows(`MATCH (d:Declaration) WHERE d.file = $file AND d.line = $line AND d.col <= $col AND $col < d.col + size(d.name) RETURN ${columns()}`, { file: relativeFile, line: address.line, col: address.col });
+    const source = this.source.read(file);
+    const position = offsetAt(source, address.line, address.col);
+    const declarations = this.rows(`MATCH (d:Declaration) WHERE d.file = $file AND d.line = $line RETURN ${columns()}`, { file: relativeFile, line: address.line })
+      .filter((row) => {
+        const nameSpan = this.source.declarationNameSpanAt(file, number(row, 'line'), number(row, 'col'));
+        return nameSpan !== null && nameSpan.start <= position && position < nameSpan.end;
+      });
     const references = declarations.length === 0
       ? this.rows(`MATCH (owner:Declaration)-[r:REFERENCES]->(d:Declaration) WHERE owner.file = $file AND r.line = $line AND r.col <= $col RETURN ${columns()}, r.col AS referenceCol`, { file: relativeFile, line: address.line, col: address.col })
-        .filter((row) => address.col < number(row, 'referenceCol') + identifierLengthAt(this.source.read(file), address.line, number(row, 'referenceCol')))
+        .filter((row) => address.col < number(row, 'referenceCol') + identifierLengthAt(source, address.line, number(row, 'referenceCol')))
       : [];
-    const records = unique([...declarations, ...references].map((row) => this.record(row)));
+    const enclosing = declarations.length === 0 && references.length === 0
+      ? this.rows(`MATCH (d:Declaration) WHERE d.file = $file AND d.line > 0 AND d.endLine - d.lines + 1 <= $line AND $line <= d.endLine RETURN ${columns()}`, { file: relativeFile, line: address.line })
+        .flatMap((row) => {
+          const span = this.source.declarationSpanAt(file, number(row, 'line'), number(row, 'col'));
+          return span && span.start <= position && position < span.end ? [{ row, span }] : [];
+        })
+        .sort((left, right) => left.span.end - left.span.start - (right.span.end - right.span.start) || right.span.start - left.span.start)
+        .slice(0, 1)
+        .map(({ row }) => row)
+      : [];
+    const records = unique((declarations.length > 0 ? declarations : references.length > 0 ? references : enclosing).map((row) => this.record(row)));
     if (records.length === 0) {
       if (this.rows('MATCH (d:Declaration) WHERE d.file = $file AND d.line = 0 RETURN d.key AS key', { file: relativeFile }).length === 0) throw this.notInProgram(address.path);
-      throw new DeclarationError('unresolvable-symbol', `${inputAddress(address)} does not resolve to a declaration`);
+      throw new DeclarationError('unresolvable-symbol', this.unresolvableAddress(address, relativeFile));
     }
     if (records.length > 1) throw new DeclarationError('ambiguous-symbol', `${inputAddress(address)} resolves to several declarations`, records.map((item) => item.address));
     return records[0]!;
@@ -75,6 +106,13 @@ export class DeclarationResolver {
     const start = location.line === 0 ? 0 : offsetAt(source, startLine, 1);
     const end = location.line === 0 ? source.length : offsetAt(source, number(row, 'endLine') + 1, 1);
     return { address: inputAddress(location), location, file, kind: text(row, 'kind'), name, qualifiedName: location.line === 0 ? name : text(row, 'qname'), nameSpan: { start: nameStart, end: nameStart + name.length }, span: { start, end } };
+  }
+
+  private unresolvableAddress(address: DeclarationAddress, file: string): string {
+    const topLevel = this.rows('MATCH (d:Declaration) WHERE d.file = $file AND d.line > 0 AND d.container = $module RETURN d.at AS at, d.kind AS kind, d.qname AS qname ORDER BY d.line, d.col', { file, module: `${file}#<module>` });
+    const shown = topLevel.slice(0, 20);
+    const tail = topLevel.length > shown.length ? `\n+${topLevel.length - shown.length} more, run outline ${file}` : '';
+    return `${inputAddress(address)} does not resolve to a declaration.\nModule: ${file}:0:0\nTop-level declarations:\n${shown.map((row) => `${text(row, 'at')}  ${text(row, 'kind')}  ${text(row, 'qname')}`).join('\n')}${tail}`;
   }
 
   private validatePosition(address: DeclarationAddress, file: string): void {

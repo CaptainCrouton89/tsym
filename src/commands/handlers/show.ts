@@ -7,8 +7,7 @@ interface StoredSpan { endLine: number; lines: number; declCount: number; }
 const handler: SemanticHandler = async (context, invocation) => {
   await context.projects.bootstrap();
   const started = performance.now();
-  const resolved: DeclarationRecord[] = [];
-  for (const input of invocation.input.args) resolved.push(await context.resolver.resolve(input));
+  const resolved = await context.resolver.resolveAll(invocation.input.args);
   const rendered = [];
   for (const declaration of resolved) {
     const source = context.source.read(declaration.file);

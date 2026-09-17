@@ -17,8 +17,7 @@ const handler: SemanticHandler = async (context, invocation) => {
   const depth = invocation.input.flags['--depth'] as number;
   const graphMode = invocation.input.flags['--graph'] === true;
   const filters = { in: strings(invocation.input.flags['--in']), exclude: strings(invocation.input.flags['--exclude']) };
-  const seeds: DeclarationRecord[] = [];
-  for (const input of invocation.input.args) seeds.push(await context.resolver.resolve(input));
+  const seeds = await context.resolver.resolveAll(invocation.input.args);
     if (graphMode) return graphAnswer(context, seeds, selected, depth, filters, started);
     const blocks: OutputNode[] = [];
     let answers = 0;
