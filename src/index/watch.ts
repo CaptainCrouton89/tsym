@@ -42,7 +42,8 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
   };
 
   const onRootEvent = (_event: string, name: string | Buffer | null) => {
-    if (name === null) { invalidate(); return; }
+    // Deleting the root arrives as one event named after the root itself, which no file filter below would keep.
+    if (name === null || !existsSync(root)) { invalidate(); return; }
     const file = path.resolve(root, name.toString());
     const relative = path.relative(root, file);
     if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || relative.split(path.sep).some((part) => skippedDirectories.has(part))) return;

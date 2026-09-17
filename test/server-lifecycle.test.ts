@@ -21,9 +21,9 @@ test('resident exits after its workspace root is deleted', async () => {
   const cache = mkdtempSync(path.join(tmpdir(), 'tsym-test-'));
   cpSync(fixture, root, { recursive: true });
   try {
-    const invoke = runAt(root, cache, ['outline'], { TSYM_IDLE_SECONDS: '2' });
+    const invoke = runAt(root, cache, ['outline'], { TSYM_IDLE_SECONDS: '60' });
     assert.equal(invoke.status, 0, invoke.stderr);
-    const status = runAt(root, cache, ['server', 'status'], { TSYM_IDLE_SECONDS: '2' });
+    const status = runAt(root, cache, ['server', 'status'], { TSYM_IDLE_SECONDS: '60' });
     assert.equal(status.status, 0, status.stderr);
     const port = /port="([^"]+)"/.exec(status.stdout)?.[1];
     const log = /log="([^"]+)"/.exec(status.stdout)?.[1];
