@@ -47,7 +47,7 @@ export function refreshIndex(root: string, program: Ts7Host, projects: Configure
 }
 
 export function graphsEqual(left: HeritageGraph, right: HeritageGraph): boolean {
-  return JSON.stringify(normalize(storeGraph(left))) === JSON.stringify(normalize(storeGraph(right)));
+  return graphFingerprint(storeGraph(left)) === graphFingerprint(storeGraph(right));
 }
 
 function indexGraph(root: string, program: Ts7Host, projects: ConfiguredProjects): HeritageGraph {
@@ -55,16 +55,27 @@ function indexGraph(root: string, program: Ts7Host, projects: ConfiguredProjects
 }
 
 function differingFiles(previous: BuiltIndex, next: HeritageGraph): string[] {
+  const previousHeritage = heritageByFile(previous.graph, previous.heritage);
+  const nextHeritage = heritageByFile(next.graph, next.relationships);
   const files = new Set([...previous.graph.files.keys(), ...next.graph.files.keys()]);
-  return [...files].filter((file) => fileFingerprint(previous.graph, previous.heritage, file) !== fileFingerprint(next.graph, next.relationships, file)).sort();
+  return [...files].filter((file) => fileFingerprint(previous.graph, previousHeritage.get(file) ?? [], file) !== fileFingerprint(next.graph, nextHeritage.get(file) ?? [], file)).sort();
 }
 
-function fileFingerprint(graph: BuiltIndex['graph'], heritage: readonly HeritageGraph['relationships'][number][], file: string): string {
+export function fileFingerprint(graph: BuiltIndex['graph'], heritage: readonly HeritageGraph['relationships'][number][], file: string): string {
   const record = graph.files.get(file);
-  const keys = new Set(record?.declarations ?? []);
-  const declarations = [...keys].map((key) => graph.declarations.get(key)).filter(Boolean).sort(byJson);
-  const relationships = [...(record?.relationships ?? []), ...heritage.filter((relationship) => keys.has(relationship.from))].sort(byJson);
-  return JSON.stringify({ declarations, relationships });
+  const declarations = [...new Set(record?.declarations ?? [])].flatMap((key) => {
+    const declaration = graph.declarations.get(key);
+    return declaration === undefined ? [] : [declaration];
+  });
+  return `{"declarations":[${serializedRows(declarations).join(',')}],"relationships":[${serializedRows([...(record?.relationships ?? []), ...heritage]).join(',')}]}`;
+}
+
+function heritageByFile(graph: BuiltIndex['graph'], heritage: readonly HeritageGraph['relationships'][number][]): Map<string, HeritageGraph['relationships'][number][]> {
+  const filesByDeclaration = new Map<string, string[]>();
+  for (const [file, record] of graph.files) for (const key of record.declarations) (filesByDeclaration.get(key) ?? filesByDeclaration.set(key, []).get(key)!).push(file);
+  const grouped = new Map<string, HeritageGraph['relationships'][number][]>();
+  for (const relationship of heritage) for (const file of filesByDeclaration.get(relationship.from) ?? []) (grouped.get(file) ?? grouped.set(file, []).get(file)!).push(relationship);
+  return grouped;
 }
 
 function fileGraph(graph: StoreGraph, files: readonly string[]): StoreGraph {
@@ -97,16 +108,14 @@ function receiptFor(graph: StoreGraph): LoadReceipt {
   return { declarations: graph.declarations.length, externals: graph.externals.length, commits: graph.commits?.length ?? 0, relationships };
 }
 
-function normalize(graph: StoreGraph): StoreGraph {
-  return {
-    declarations: [...graph.declarations].sort(byJson),
-    externals: [...graph.externals].sort(byJson),
-    commits: graph.commits === undefined ? undefined : [...graph.commits].sort(byJson),
-    relationships: [...graph.relationships].sort(byJson),
-  };
+function graphFingerprint(graph: StoreGraph): string {
+  const commits = graph.commits === undefined ? '' : `,"commits":[${serializedRows(graph.commits).join(',')}]`;
+  return `{"declarations":[${serializedRows(graph.declarations).join(',')}],"externals":[${serializedRows(graph.externals).join(',')}]${commits},"relationships":[${serializedRows(graph.relationships).join(',')}]}`;
 }
 
-function byJson<T>(left: T, right: T): number { return JSON.stringify(left).localeCompare(JSON.stringify(right)); }
+function serializedRows(rows: readonly object[]): string[] {
+  return rows.map((row) => JSON.stringify(row)!).sort((left, right) => left.localeCompare(right));
+}
 
 function headCommit(root: string): string {
   try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }

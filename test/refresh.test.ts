@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { buildIndex, type BuiltIndex } from '../src/index/build.js';
-import { graphsEqual, refreshIndex } from '../src/index/refresh.js';
+import { fileFingerprint, graphsEqual, refreshIndex } from '../src/index/refresh.js';
 import { IndexStateController, type IndexSnapshot } from '../src/index/state.js';
 import { watchIndex, type WatchBatch } from '../src/index/watch.js';
 import { Store } from '../src/store/store.js';
@@ -45,6 +45,33 @@ function exercise(change: (write: (file: string, text: string) => void) => { fil
     cleanup();
   }
 }
+
+test('file fingerprints preserve the JSON comparator output', () => {
+  const { root, cleanup } = fixture();
+  const program = new Ts7Host(root);
+  const projects = new ConfiguredProjects(root, program);
+  const store = new Store(path.join(root, 'store'));
+  try {
+    projects.load();
+    const index = buildIndex(root, program, projects, store);
+    const oldFingerprint = (file: string): string => {
+      const record = index.graph.files.get(file);
+      const keys = new Set(record?.declarations ?? []);
+      const declarations = [...keys].map((key) => index.graph.declarations.get(key)).filter(Boolean).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+      const relationships = [...(record?.relationships ?? []), ...index.heritage.filter((relationship) => keys.has(relationship.from))].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+      return JSON.stringify({ declarations, relationships });
+    };
+    for (const [file, record] of index.graph.files) {
+      const keys = new Set(record.declarations);
+      const heritage = index.heritage.filter((relationship) => keys.has(relationship.from));
+      assert.equal(fileFingerprint(index.graph, heritage, file), oldFingerprint(file), file);
+    }
+  } finally {
+    store.close();
+    program.close();
+    cleanup();
+  }
+});
 
 test('conservative refresh matches a full rebuild for each spike edit', () => {
   exercise(() => ({ file: 'src/leaf.ts', text: 'export function leaf(): number { return 2; }\n' }));
