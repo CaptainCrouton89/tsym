@@ -1,11 +1,11 @@
 {
   "name": "@crouton-kit/tsym",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Symbol-level reading of a TypeScript codebase for agents.",
   "type": "module",
   "license": "MIT",
   "bin": {
-    "tsym": "./bin/tsym.js"
+    "tsym": "bin/tsym.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
