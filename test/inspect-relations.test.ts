@@ -30,7 +30,7 @@ test('inspect owns calls in function expression contexts and excludes concrete d
 
     const concrete = run('inspect', 'constInitializerOwner', '--only', 'impl', '--each', '0');
     assert.equal(concrete.status, 1, `${concrete.stdout}\n${concrete.stderr}`);
-    assert.match(concrete.stdout, /<impl count="0"\/>/);
+    assert.match(concrete.stdout, /<impl count="0" scope="compiler-resolved"\/>/);
 
     const contract = run('inspect', 'Sink', '--only', 'impl', '--each', '0');
     assert.equal(contract.status, 0, `${contract.stdout}\n${contract.stderr}`);

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { DeclarationRecord } from '../core/declarations.js';
+import { directMembers } from '../core/members.js';
 import { matchesPathFilters } from '../core/receipt.js';
 import { query } from '../store/query.js';
 import type { StoreRow } from '../store/store.js';
@@ -14,6 +15,31 @@ export interface ReferenceRow {
   kind: string;
   qualifiedName: string;
   role: string;
+}
+
+export interface MemberSummary {
+  key: string;
+  address: string;
+  path: string;
+  line: number;
+  col: number;
+  kind: string;
+  qualifiedName: string;
+  callers: number;
+  calls: number;
+  refs: number;
+  container: string;
+}
+
+export async function memberSummaries(context: SemanticContext, record: DeclarationRecord): Promise<MemberSummary[]> {
+  const container = recordKey(context, record);
+  const members = directMembers(storeRows(context, 'MATCH (member:Declaration) WHERE member.container = $container RETURN member.key AS key, member.at AS at, member.file AS file, member.line AS line, member.col AS col, member.kind AS kind, member.qname AS qname, member.container AS container', { container }).map((row) => ({ key: text(row, 'key'), address: text(row, 'at'), path: text(row, 'file'), line: number(row, 'line'), col: number(row, 'col'), kind: text(row, 'kind'), qualifiedName: text(row, 'qname'), container: text(row, 'container') })), container);
+  const callers = relatedKeys(context, 'MATCH (caller:Declaration)-[call:CALLS]->(member:Declaration) WHERE member.container = $container AND call.dispatch = false RETURN member.key AS member, caller.key AS related', container);
+  addRelatedKeys(callers, relatedKeys(context, 'MATCH (member:Declaration)-[:IMPLEMENTS]->(:Declaration)<-[call:CALLS]-(caller:Declaration) WHERE member.container = $container AND call.dispatch = true RETURN member.key AS member, caller.key AS related', container));
+  const calls = relatedKeys(context, 'MATCH (member:Declaration)-[call:CALLS]->(target:Declaration) WHERE member.container = $container AND call.dispatch = false RETURN member.key AS member, target.key AS related', container);
+  addRelatedKeys(calls, relatedKeys(context, 'MATCH (member:Declaration)-[call:CALLS]->(contract:Declaration)<-[:IMPLEMENTS]-(target:Declaration) WHERE member.container = $container AND call.dispatch = true RETURN member.key AS member, target.key AS related', container));
+  const refs = new Map(storeRows(context, 'MATCH (:Declaration)-[reference:REFERENCES]->(member:Declaration) WHERE member.container = $container RETURN member.key AS member, count(reference) AS refs', { container }).map((row) => [text(row, 'member'), number(row, 'refs')]));
+  return members.map((member) => ({ ...member, callers: callers.get(member.key)?.size ?? 0, calls: calls.get(member.key)?.size ?? 0, refs: refs.get(member.key) ?? 0 }));
 }
 
 export async function references(context: SemanticContext, record: DeclarationRecord, filters: { in: readonly string[]; exclude: readonly string[] }): Promise<ReferenceRow[]> {
@@ -187,3 +213,14 @@ function unresolvedSite(record: DeclarationRecord, row: StoreRow, name: string, 
 function text(row: StoreRow, key: string): string { return String(row[key] ?? ''); }
 function number(row: StoreRow, key: string): number { return Number(row[key]); }
 function boolean(row: StoreRow, key: string): boolean { return row[key] === true; }
+function relatedKeys(context: SemanticContext, statement: string, container: string): Map<string, Set<string>> {
+  const related = new Map<string, Set<string>>();
+  for (const row of storeRows(context, statement, { container })) {
+    const member = text(row, 'member');
+    (related.get(member) ?? related.set(member, new Set()).get(member)!).add(text(row, 'related'));
+  }
+  return related;
+}
+function addRelatedKeys(target: Map<string, Set<string>>, additional: ReadonlyMap<string, ReadonlySet<string>>): void {
+  for (const [member, keys] of additional) for (const key of keys) (target.get(member) ?? target.set(member, new Set()).get(member)!).add(key);
+}

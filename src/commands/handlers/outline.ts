@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs';
 import path from 'node:path';
 import { DeclarationError } from '../../core/declarations.js';
+import { membersByContainer } from '../../core/members.js';
 import { matchesPathFilters } from '../../core/receipt.js';
 import { displayPath, scopeFiles } from '../../read/read.js';
 import { query } from '../../store/query.js';
@@ -59,8 +60,7 @@ function indexedImports(context: Parameters<SemanticHandler>[0]): Import[] {
 }
 
 function select(items: readonly Declaration[], flags: Record<string, boolean | number | string | string[]>, depth: number, members = flags['--members'] === true): Declaration[] {
-  const byContainer = new Map<string, Declaration[]>();
-  for (const item of items) if (item.container) byContainer.set(item.container, [...(byContainer.get(item.container) ?? []), item]);
+  const byContainer = membersByContainer(items);
   const roots = items.filter((item) => item.container === `${item.path}#<module>`);
   const out: Declaration[] = [];
   const visit = (item: Declaration, remaining: number) => {

@@ -63,9 +63,35 @@ test('inspect follows both interface implementations and reports one dispatch si
       assert.match(result.stderr, /1 dispatch/);
       assert.doesNotMatch(result.stderr, /unresolved/);
     }
+    const container = run('inspect', 'Greeter', '--each', '0');
+    assert.equal(container.status, 0, container.stderr);
+    assert.match(container.stdout, /<members count="6" files="1">/);
+    assert.match(container.stdout, /Greeter\.say  \(1 callers, 1 calls\)/);
+    assert.match(container.stdout, /<calls count="0" scope="compiler-resolved"\/>/);
+    assert.match(container.stderr, /callers are constructor\/type uses; methods have their own — inspect Greeter\.say/);
+    assert.match(container.stderr, /0 counts cover indexed, compiler-resolved relations only; framework, HTTP, and dependency-injection invocation are not visible/);
+
+    const membersOnly = run('inspect', 'Greeter', '--only', 'members', '--each', '1');
+    assert.match(membersOnly.stdout, /<members count="6" files="1" shown="1">/);
+    assert.match(membersOnly.stderr, /0 counts cover indexed, compiler-resolved relations only; framework, HTTP, and dependency-injection invocation are not visible/);
+
+    const implementationMembers = run('inspect', 'FirstSink', '--only', 'members', '--each', '0');
+    assert.match(implementationMembers.stdout, /FirstSink\.send  \(3 callers, 1 calls\)/);
+
+    const dispatchingMembers = run('inspect', 'DispatchingSink', '--only', 'members', '--each', '0');
+    assert.match(dispatchingMembers.stdout, /DispatchingSink\.send  \(0 callers, 2 calls\)/);
+    const dispatchingCalls = run('inspect', 'DispatchingSink.send', '--only', 'calls', '--each', '0');
+    assert.match(dispatchingCalls.stdout, /<calls count="2" files="1">/);
+
+    const plainFunction = run('inspect', 'greet', '--each', '0');
+    const plainMembers = run('inspect', 'greet', '--only', 'members', '--each', '0');
+    assert.match(plainMembers.stderr, /greet: no indexed members/);
+    assert.doesNotMatch(plainFunction.stdout, /<members/);
+    assert.doesNotMatch(plainFunction.stderr, /methods have their own/);
+
     const dynamic = run('inspect', 'invokeDynamic', '--only', 'calls', '--each', '0');
     assert.equal(dynamic.status, 1);
-    assert.match(dynamic.stdout, /<calls count="0"\/>/);
+    assert.match(dynamic.stdout, /<calls count="0" scope="compiler-resolved"\/>/);
     assert.doesNotMatch(dynamic.stdout, /unresolved_dynamic/);
     assert.doesNotMatch(dynamic.stderr, /unresolved/);
     const external = run('inspect', 'chained', '--only', 'calls', '--graph');
