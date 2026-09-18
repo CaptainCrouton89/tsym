@@ -6,8 +6,8 @@ export function xml(name: string, attributes: Record<string, string | number | b
   return body === '' ? `<${name}${rendered}/>` : `<${name}${rendered}>\n${body}\n</${name}>`;
 }
 
-export function escapeText(value: string): string { return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-export function escapeAttribute(value: string): string { return escapeText(value).replace(/"/g, '&quot;').replace(/'/g, '&apos;'); }
+/** Output is XML-shaped prose for an agent, never parsed as XML; only a double quote inside an attribute value is escaped, so the value's boundary stays readable. */
+export function escapeAttribute(value: string): string { return value.replace(/"/g, '&quot;'); }
 
 export function renderCompletion(completion: Completion, json: boolean): { stdout: string; stderr: string; exitCode: 0 | 1 | 2 | 3 } {
   const exitCode = completionCode(completion);
@@ -40,7 +40,7 @@ export function renderNode(node: OutputNode): string {
 function renderInvocationError(error: InvocationError): string {
   const body = error.problems.map((problem) => {
     const expected = problem.expected.endsWith('.') ? problem.expected : `${problem.expected}.`;
-    return `${escapeText(problem.field)}: received ${escapeText(problem.received)}; expected ${escapeText(expected)}\nNext: ${escapeText(problem.next ?? '')}`;
+    return `${problem.field}: received ${problem.received}; expected ${expected}\nNext: ${problem.next ?? ''}`;
   }).join('\n');
   return xml('error', { code: error.code }, body);
 }

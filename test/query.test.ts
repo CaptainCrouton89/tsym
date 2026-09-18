@@ -180,6 +180,6 @@ test('rejects malformed queries and maps Ladybug interruption to query-timeout',
 
 test('query help carries the schema, every relationship, examples, and Ladybug dialect differences', () => {
   const query = commandTree.children!.find((child) => child.name === 'query')!;
-  const help = renderHelp(query).replaceAll('&lt;', '<').replaceAll('&gt;', '>').replace(/\s+/g, ' ');
+  const help = renderHelp(query).replace(/\s+/g, ' ');
   for (const text of ['<schema>', 'CONTAINS', 'REFERENCES', 'CALLS', 'IMPLEMENTS', 'EXTENDS', 'TYPE_MENTION', 'IMPORTS', 'EXPORTS', 'CHANGED', 'RENAMED_FROM', '(new:Declaration)-[:RENAMED_FROM {oldKey,basis}]->(c:Commit)', q1, q2, q3, q4, q5, q6, q7, inbound, outbound, 'List comprehensions', 'SKIP or LIMIT', '1-based inclusive', 'collect() over only nulls']) assert.ok(help.includes(text.replace(/\s+/g, ' ')), `help omitted ${text}`);
 });

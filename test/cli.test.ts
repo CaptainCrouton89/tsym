@@ -48,7 +48,7 @@ test('search reports an ast-grep pattern that does not parse as one node', () =>
     assert.equal(result.status, 2, result.stderr);
     assert.match(result.stdout, /<error code="invalid-pattern">/);
     assert.match(result.stdout, /Multiple AST nodes are detected/);
-    assert.match(result.stdout, /foo&lt;Bar&gt;; baz/);
+    assert.match(result.stdout, /foo<Bar>; baz/);
   } finally {
     rmSync(cache, { recursive: true, force: true });
   }
