@@ -7,10 +7,8 @@ import { type ServerPaths, pathsForRoot } from '../server/lifecycle.js';
 import { NdjsonReader, WIRE_VERSION, type ResponseFrame, writeFrame } from '../server/wire.js';
 import { readMetadata, sameFormat, writeMetadata, type StoreFormatIdentity, type StoreMetadata } from './meta.js';
 
-export const MAX_DIFFERING_FILE_FRACTION = 0.15;
-
-interface Candidate { root: string; store: string; metadata: StoreMetadata; differingFiles: number; }
-export interface SeedReceipt { root: string; differingFiles: number; bytes: number; durationMs: number; }
+interface Candidate { root: string; store: string; metadata: StoreMetadata; }
+export interface SeedReceipt { root: string; bytes: number; durationMs: number; }
 
 /** Finds compatible sibling stores and installs one only after a complete copy validates. */
 export async function seedFromSibling(root: string, paths: ServerPaths, expected: StoreMetadata, identity: StoreFormatIdentity): Promise<SeedReceipt | undefined> {
@@ -26,7 +24,7 @@ export async function seedFromSibling(root: string, paths: ServerPaths, expected
       writeMetadata(seedPath(paths), { ...copiedMetadata, root });
       rmSync(paths.store, { recursive: true, force: true });
       renameSync(seedPath(paths), paths.store);
-      return { root: candidate.root, differingFiles: candidate.differingFiles, bytes: directoryBytes(paths.store), durationMs: performance.now() - started };
+      return { root: candidate.root, bytes: directoryBytes(paths.store), durationMs: performance.now() - started };
     } catch {
       rmSync(seedPath(paths), { recursive: true, force: true });
     }
@@ -58,11 +56,10 @@ function siblings(root: string, paths: ServerPaths, expected: StoreMetadata, ide
     let metadata: StoreMetadata | null;
     try { metadata = readMetadata(store); } catch { continue; }
     if (metadata === null || metadata.root === root || !sameFormat(metadata, identity)) continue;
-    const differingFiles = fileDifference(metadata.files, expected.files);
-    if (differingFiles / Math.max(1, Object.keys(metadata.files).length, Object.keys(expected.files).length) > MAX_DIFFERING_FILE_FRACTION) continue;
-    candidates.push({ root: metadata.root, store, metadata, differingFiles });
+    if (fileDifference(metadata.files, expected.files) !== 0) continue;
+    candidates.push({ root: metadata.root, store, metadata });
   }
-  return candidates.sort((left, right) => left.differingFiles - right.differingFiles);
+  return candidates;
 }
 
 function copyWhileLocked(candidate: Candidate, paths: ServerPaths): boolean {

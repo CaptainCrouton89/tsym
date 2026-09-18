@@ -61,7 +61,7 @@ test('a fresh root seeds from an indexed sibling and reports its source', async 
     assert.match(status.stdout, /seededFrom="[^"]+\/source"/);
     const log = /log="([^"]+)"/.exec(status.stdout)?.[1];
     assert.ok(log);
-    assert.match(readFileSync(log, 'utf8'), /store seeded from .+\/source differingFiles=0/);
+    assert.match(readFileSync(log, 'utf8'), /store seeded from .+\/source bytes=/);
   } finally {
     runAt(source, cache, ['server', 'stop']);
     runAt(destination, cache, ['server', 'stop']);
@@ -94,7 +94,7 @@ test('a fresh root seeds from a dormant sibling and the sibling can start again'
   }
 });
 
-test('a distant sibling is refused and the destination cold-builds', () => {
+test('a sibling with one differing file is refused and the destination cold-builds', () => {
   const temporary = mkdtempSync(path.join(tmpdir(), 'tsym-seed-distant-'));
   const source = path.join(temporary, 'source');
   const destination = path.join(temporary, 'destination');
@@ -103,16 +103,16 @@ test('a distant sibling is refused and the destination cold-builds', () => {
   cpSync(fixture, destination, { recursive: true });
   try {
     assert.equal(runAt(source, cache, ['outline']).status, 0);
-    for (const file of readdirSync(path.join(destination, 'src'))) {
-      if (file.endsWith('.ts')) writeFileSync(path.join(destination, 'src', file), `${readFileSync(path.join(destination, 'src', file), 'utf8')}\n// distinct sibling\n`);
-    }
+    const file = readdirSync(path.join(destination, 'src')).find((entry) => entry.endsWith('.ts'));
+    assert.ok(file);
+    writeFileSync(path.join(destination, 'src', file), `${readFileSync(path.join(destination, 'src', file), 'utf8')}\n// distinct sibling\n`);
     const started = runAt(destination, cache, ['outline']);
     assert.equal(started.status, 0, started.stderr);
     const status = runAt(destination, cache, ['server', 'status']);
     assert.doesNotMatch(status.stdout, /seededFrom=/);
     const log = /log="([^"]+)"/.exec(status.stdout)?.[1];
     assert.ok(log);
-    assert.match(readFileSync(log, 'utf8'), /store seed skipped: no compatible sibling within/);
+    assert.match(readFileSync(log, 'utf8'), /store seed skipped: no identical sibling/);
   } finally {
     runAt(source, cache, ['server', 'stop']);
     runAt(destination, cache, ['server', 'stop']);

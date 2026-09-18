@@ -7,7 +7,7 @@ import type { Completion, Invocation, ToolError } from '../commands/types.js';
 import { discoverRoot, ensureStateDirectory, pathsForRoot, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, request, type PhaseFrame, type ResponseFrame, type WireFrame, writeFrame } from './wire.js';
 
-type DeadlinePhase = 'queued' | 'project-load' | 'running';
+type DeadlinePhase = 'queued' | 'project-load' | 'index-build' | 'running';
 
 class SessionDied extends Error {}
 class Stopping extends Error {}
@@ -116,9 +116,9 @@ function exchange(paths: ServerPaths, payload: ReturnType<typeof request>): Prom
       switch (frame.phase) {
         case 'queued': deadlinePhase = 'queued'; break;
         case 'project-load-start':
-        case 'project-load-end':
+        case 'project-load-end': deadlinePhase = 'project-load'; break;
         case 'index-build-start':
-        case 'index-build-end': deadlinePhase = 'project-load'; break;
+        case 'index-build-end': deadlinePhase = 'index-build'; break;
         case 'running': deadlinePhase = 'running'; break;
         case 'command-start': command = frame.command; break;
         case 'stopping': stopping = true; break;
@@ -152,6 +152,7 @@ function withStartup(completion: Completion & { startupStartedAt?: number }, sta
 
 function deadlineFailure(paths: ServerPaths, deadline: DeadlineExpired): ToolError {
   if (deadline.phase === 'project-load') return { category: 'tool', code: 'project-load-timeout', message: 'TypeScript did not load the workspace project before its deadline.', logPath: paths.log, next: 'Repair the project, then retry.' };
+  if (deadline.phase === 'index-build') return { category: 'tool', code: 'index-build-timeout', message: 'The workspace index did not build before its deadline.', logPath: paths.log, next: 'Repair the project, then retry.' };
   if (deadline.phase === 'running') return { category: 'tool', code: 'request-timeout', message: 'The semantic request exceeded its deadline.', logPath: paths.log, received: deadline.command ?? 'no semantic operation started', next: 'Retry after repairing the workspace or narrowing the command.' };
   return { category: 'tool', code: 'server-unavailable', message: 'The resident did not begin this request before its admission deadline.', logPath: paths.log, next: 'Retry after the current request completes.' };
 }

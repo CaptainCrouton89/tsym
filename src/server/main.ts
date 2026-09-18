@@ -28,7 +28,7 @@ interface Queued {
 }
 
 class DeadlineExceeded extends Error {
-  constructor(readonly phase: 'project-load' | 'request') { super(`${phase} deadline exceeded`); }
+  constructor(readonly phase: 'project-load' | 'index-build') { super(`${phase} deadline exceeded`); }
 }
 
 async function main(): Promise<void> {
@@ -62,6 +62,7 @@ async function main(): Promise<void> {
   let queue: Queued[] = [];
   let currentCommand: string | undefined;
   let loadDeadlineAt: number | undefined;
+  let indexBuildDeadlineAt: number | undefined;
   let activeDeadlineAt: number | undefined;
   let activeTimer: NodeJS.Timeout | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
@@ -192,9 +193,12 @@ async function main(): Promise<void> {
     exitAfterCleanup();
   };
 
-  const projectLoadTimeout = () => {
+  const startupDeadlineFailure = (phase: 'project-load' | 'index-build') => phase === 'project-load'
+    ? toolError('project-load-timeout', 'TypeScript did not load the workspace project before its deadline.', 'Repair the project, then retry.')
+    : toolError('index-build-timeout', 'The workspace index did not build before its deadline.', 'Repair the project, then retry.');
+  const startupTimeout = (phase: 'project-load' | 'index-build') => {
     if (retired) return;
-    const completion = toolError('project-load-timeout', 'TypeScript did not load the workspace project before its deadline.', 'Repair the project, then retry.');
+    const completion = startupDeadlineFailure(phase);
     if (active) {
       respond(active.socket, active.request.requestId, completion);
       finishSocket(active.socket);
@@ -217,21 +221,26 @@ async function main(): Promise<void> {
     if (active) sendPhase(active.socket, active.request.requestId, 'running', 120_000);
   };
 
-  const loadProjects = async () => {
+  const loadProjects = async (startup?: { socket: Socket; requestId: string }) => {
     loading = true;
-    loadDeadlineAt = performance.now() + 60_000;
-    if (active) sendPhase(active.socket, active.request.requestId, 'project-load-start', 60_000);
-    for (const queued of queue) {
-      pauseQueueDeadline(queued);
-      sendPhase(queued.socket, queued.request.requestId, 'project-load-start', 60_000);
-    }
-    let timedOut = false;
+    const sendStartupPhase = (phase: Extract<WireFrame, { type: 'phase' }>['phase'], remainingMs?: number) => {
+      if (active) sendPhase(active.socket, active.request.requestId, phase, remainingMs);
+      for (const queued of queue) sendPhase(queued.socket, queued.request.requestId, phase, remainingMs);
+      if (startup) sendPhase(startup.socket, startup.requestId, phase, remainingMs);
+    };
     let deadlineTimer: NodeJS.Timeout | undefined;
+    const deadline = (phase: 'project-load' | 'index-build', durationMs: number) => new Promise<never>((_, reject) => {
+      deadlineTimer = setTimeout(() => reject(new DeadlineExceeded(phase)), durationMs);
+      deadlineTimer.unref();
+    });
     try {
-      await Promise.race([
+      loadDeadlineAt = performance.now() + 60_000;
+      for (const queued of queue) pauseQueueDeadline(queued);
+      sendStartupPhase('project-load-start', 60_000);
+      semantic ??= createSemanticContext(root);
+      const { program, projects } = semantic;
+      const { configured, identity, expected } = await Promise.race([
         (async () => {
-          semantic ??= createSemanticContext(root);
-          const { program, projects } = semantic;
           await projects.bootstrap();
           const configured = projects.configured();
           const identity = formatIdentity();
@@ -241,36 +250,50 @@ async function main(): Promise<void> {
             const seeded = await seedFromSibling(root, paths, expected, identity);
             if (seeded) {
               seededFrom = seeded.root;
-              append(paths, `store seeded from ${seeded.root} differingFiles=${seeded.differingFiles} bytes=${seeded.bytes} duration=${Math.round(seeded.durationMs)}ms`);
-            } else append(paths, 'store seed skipped: no compatible sibling within 15%');
+              append(paths, `store seeded from ${seeded.root} bytes=${seeded.bytes} duration=${Math.round(seeded.durationMs)}ms`);
+            } else append(paths, 'store seed skipped: no identical sibling');
           }
-          store = new Store(paths.store);
-          if (active) sendPhase(active.socket, active.request.requestId, 'index-build-start', remaining(loadDeadlineAt));
-          // The watcher starts before the build, not after it: buildIndex takes tens of seconds on a large workspace,
-          // and an edit landing in that window would otherwise never be recorded, publishing a stale index as current.
-          // buildIndex is synchronous, so no watch callback can run until index is assigned below.
-          watcher = watchIndex(root, configured, refresh, (error) => append(paths, `index refresh failure: ${safe(error)}`), (flush) => index?.markStale(flush));
-          const metadata = readMetadata(store.path);
-          let built: ReturnType<typeof buildIndex>;
+          return { configured, identity, expected };
+        })(),
+        deadline('project-load', 60_000),
+      ]);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      deadlineTimer = undefined;
+      loadDeadlineAt = undefined;
+      store = new Store(paths.store);
+      indexBuildDeadlineAt = performance.now() + 180_000;
+      sendStartupPhase('index-build-start', 180_000);
+      // The watcher starts before the build, not after it: buildIndex takes tens of seconds on a large workspace,
+      // and an edit landing in that window would otherwise never be recorded, publishing a stale index as current.
+      // buildIndex is synchronous, so no watch callback can run until index is assigned below.
+      watcher = watchIndex(root, configured, refresh, (error) => append(paths, `index refresh failure: ${safe(error)}`), (flush) => index?.markStale(flush));
+      const metadata = readMetadata(store.path);
+      let built: ReturnType<typeof buildIndex>;
+      await Promise.race([
+        (async () => {
           if (!forceRebuild && metadata !== null) {
-            const reused = reuseIndex(store);
+            const reused = reuseIndex(store!);
             if (hasDrift(metadata, expected)) {
-              const refreshed = refreshIndex(root, program, configured, store, reused, { fileChanges: { invalidateAll: true } }, identity);
+              const refreshed = refreshIndex(root, program, configured, store!, reused, { fileChanges: { invalidateAll: true } }, identity);
               append(paths, `index refresh stored=${refreshed.stored} changedFiles=${refreshed.changedFiles.length} duration=${Math.round(refreshed.built.receipt.durationMs)}ms`);
               built = refreshed.built;
             } else built = reused;
           } else {
-            built = buildIndex(root, program, configured, store, identity);
+            built = buildIndex(root, program, configured, store!, identity);
           }
-          index = new IndexStateController({ indexedAt: indexedAt(root), state: 'current', built }, (snapshot) => {
-            semantic!.index = snapshot;
-            publishState(paths, publishedState(snapshot));
-          });
-          semantic!.store = store;
-          if (active) sendPhase(active.socket, active.request.requestId, 'index-build-end', remaining(loadDeadlineAt));
         })(),
-        new Promise<never>((_, reject) => { deadlineTimer = setTimeout(() => { timedOut = true; reject(new DeadlineExceeded('project-load')); }, 60_000); deadlineTimer.unref(); }),
+        deadline('index-build', 180_000),
       ]);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      deadlineTimer = undefined;
+      const indexBuildRemaining = remaining(indexBuildDeadlineAt);
+      indexBuildDeadlineAt = undefined;
+      index = new IndexStateController({ indexedAt: indexedAt(root), state: 'current', built: built! }, (snapshot) => {
+        semantic!.index = snapshot;
+        publishState(paths, publishedState(snapshot));
+      });
+      semantic!.store = store;
+      sendStartupPhase('index-build-end', indexBuildRemaining);
       bootstrapped = true;
     } finally {
       if (deadlineTimer) clearTimeout(deadlineTimer);
@@ -281,13 +304,8 @@ async function main(): Promise<void> {
       }
       loading = false;
       loadDeadlineAt = undefined;
-      if (!timedOut && !retired) {
-        if (active) sendPhase(active.socket, active.request.requestId, 'project-load-end', 60_000);
-        for (const queued of queue) {
-          sendPhase(queued.socket, queued.request.requestId, 'project-load-end', 60_000);
-          armQueueDeadline(queued);
-        }
-      }
+      indexBuildDeadlineAt = undefined;
+      if (bootstrapped && !retired) for (const queued of queue) armQueueDeadline(queued);
     }
   };
 
@@ -314,8 +332,8 @@ async function main(): Promise<void> {
       if ('category' in completion && completion.category === 'tool' && !completion.logPath) completion.logPath = paths.log;
       if (!retired) respond(queued.socket, queued.request.requestId, completion);
     } catch (error) {
-      if (error instanceof DeadlineExceeded && error.phase === 'project-load') {
-        projectLoadTimeout();
+      if (error instanceof DeadlineExceeded) {
+        startupTimeout(error.phase);
         return;
       }
       if (error instanceof Ts7ServerDiedError) {
@@ -400,9 +418,10 @@ async function main(): Promise<void> {
       return;
     }
     if (request.operation === 'status' && forceRebuild && !bootstrapped) {
-      try { await loadProjects(); }
+      try { await loadProjects({ socket, requestId: request.requestId }); }
       catch (error) {
-        if (error instanceof EngineBinaryError || error instanceof TypeScriptBinaryError) respond(socket, request.requestId, { category: 'tool', code: error.code, attributes: { platform: error.platform }, message: error.message });
+        if (error instanceof DeadlineExceeded) respond(socket, request.requestId, startupDeadlineFailure(error.phase));
+        else if (error instanceof EngineBinaryError || error instanceof TypeScriptBinaryError) respond(socket, request.requestId, { category: 'tool', code: error.code, attributes: { platform: error.platform }, message: error.message });
         else respond(socket, request.requestId, toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.'));
         finishSocket(socket);
         return;
@@ -430,7 +449,7 @@ async function main(): Promise<void> {
         if (idleTimer) clearTimeout(idleTimer);
         publishState(paths, publishedState());
         for (const [invokeSocket, requestId] of invokeSockets) {
-          const deadlineAt = active?.socket === invokeSocket ? (loading ? loadDeadlineAt : activeDeadlineAt) : undefined;
+          const deadlineAt = active?.socket === invokeSocket ? (loading ? indexBuildDeadlineAt ?? loadDeadlineAt : activeDeadlineAt) : undefined;
           sendPhase(invokeSocket, requestId, 'stopping', deadlineAt === undefined ? undefined : remaining(deadlineAt));
         }
         const completion = toolError('server-unavailable', 'The resident is stopping.', 'Wait for stop to complete before invoking tsym.');
