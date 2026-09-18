@@ -47,6 +47,7 @@ export class Store {
   private boundedConnection: Connection | undefined;
   private closed = false;
   private readonly boundedQueryTimeoutMs: number;
+  private writing = false;
 
   constructor(storePath: string, options: StoreOptions = {}) {
     this.path = path.resolve(storePath);
@@ -92,16 +93,20 @@ export class Store {
     return collect(connection.executeSync(prepared, parameters));
   }
 
+  get busy(): boolean { return this.writing; }
+
   transaction<T>(work: () => T): T {
-    this.execute('BEGIN TRANSACTION');
+    if (this.writing) throw new Error('Store transaction is already in progress.');
+    this.writing = true;
     try {
+      this.execute('BEGIN TRANSACTION');
       const value = work();
       this.execute('COMMIT');
       return value;
     } catch (error) {
       try { this.execute('ROLLBACK'); } catch {}
       throw error;
-    }
+    } finally { this.writing = false; }
   }
 
   checkpoint(): void {

@@ -1,4 +1,4 @@
-export const STORE_SCHEMA_VERSION = 2;
+export const STORE_SCHEMA_VERSION = 3;
 
 export const NODE_TABLES = [
   'CREATE NODE TABLE Declaration(key STRING, at STRING, name STRING, qname STRING, kind STRING, exported BOOL, file STRING, dir STRING, top STRING, line INT64, col INT64, endLine INT64, lines INT64, declCount INT64, container STRING, PRIMARY KEY(key))',

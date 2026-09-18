@@ -1,18 +1,19 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { Connection, Database } from '@ladybugdb/core';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { loadGraph, readGraph, replaceFile, replaceFiles, type DeclarationRow, type RelationshipRow, type StoreGraph } from '../src/store/load.js';
-import { discardIncompatibleStore, readMetadata, writeMetadata } from '../src/store/meta.js';
+import { discardIncompatibleStore, formatIdentity, readMetadata, writeMetadata } from '../src/store/meta.js';
 import { query } from '../src/store/query.js';
 import { STORE_SCHEMA_VERSION } from '../src/store/schema.js';
 import { Store } from '../src/store/store.js';
 import { ensureStateDirectory, pathsForRoot } from '../src/server/lifecycle.js';
+import { refuseSeed } from '../src/store/seed.js';
 
 const storeModule = pathToFileURL(path.resolve('src/store/store.ts')).href;
 
@@ -46,19 +47,51 @@ async function killAfter(child: ReturnType<typeof spawn>, text: string): Promise
 test('a store from another schema version is discarded whole; the current version is kept', () => {
   const { root, path: storePath } = temporaryStore();
   try {
-    assert.equal(discardIncompatibleStore(storePath), false);
+    const identity = formatIdentity('7');
+    assert.equal(discardIncompatibleStore(storePath, identity), false);
     mkdirSync(storePath, { recursive: true });
-    assert.equal(discardIncompatibleStore(storePath), true, 'a store without metadata is unreadable');
+    assert.equal(discardIncompatibleStore(storePath, identity), true, 'a store without metadata is unreadable');
     mkdirSync(storePath, { recursive: true });
-    writeMetadata(storePath, { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7', tsymBuild: 'b', indexedCommit: '', configSet: [], configHashes: {}, packageHash: '', lockfileHash: '', indexDurationMs: 0, files: {} });
-    assert.equal(discardIncompatibleStore(storePath), false);
+    writeMetadata(storePath, { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7', tsymBuild: identity.tsymBuild, root, indexedCommit: '', configSet: [], configHashes: {}, packageHash: '', lockfileHash: '', indexDurationMs: 0, files: {} });
+    assert.equal(discardIncompatibleStore(storePath, identity), false);
     assert.ok(readMetadata(storePath));
     const stale = { ...readMetadata(storePath)!, schemaVersion: STORE_SCHEMA_VERSION - 1 };
     rmSync(storePath, { recursive: true, force: true });
     mkdirSync(storePath, { recursive: true });
     writeFileSync(path.join(storePath, 'meta.json'), JSON.stringify(stale));
-    assert.equal(discardIncompatibleStore(storePath), true);
+    assert.equal(discardIncompatibleStore(storePath, identity), true);
     assert.equal(readMetadata(storePath), null);
+  } finally { remove(root); }
+});
+
+test('store reports a write in flight only while its transaction is active', () => {
+  const temp = temporaryStore();
+  const store = new Store(temp.path);
+  try {
+    assert.equal(store.busy, false);
+    store.transaction(() => assert.equal(store.busy, true));
+    assert.equal(store.busy, false);
+  } finally {
+    store.close();
+    remove(temp.root);
+  }
+});
+
+test('seed handler refusal reasons reject unsafe destinations and unavailable stores', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'tsym-seed-refusal-'));
+  const cache = path.join(root, 'tsym');
+  const destination = path.join(cache, 'destination', 'store.seed');
+  try {
+    mkdirSync(cache);
+    assert.equal(refuseSeed(destination, cache, false, false), 'The resident has not bootstrapped a store.');
+    assert.equal(refuseSeed(destination, cache, true, true), 'The resident is writing its store.');
+    assert.equal(refuseSeed(path.join(root, 'outside'), cache, true, false), 'The seed destination must be a new directory inside the tsym cache.');
+    const outside = path.join(root, 'outside');
+    mkdirSync(outside);
+    symlinkSync(outside, path.join(cache, 'link'));
+    assert.equal(refuseSeed(path.join(cache, 'link', 'store.seed'), cache, true, false), 'The seed destination must be a new directory inside the tsym cache.');
+    mkdirSync(destination, { recursive: true });
+    assert.equal(refuseSeed(destination, cache, true, false), 'The seed destination must be a new directory inside the tsym cache.');
   } finally { remove(root); }
 });
 
@@ -277,7 +310,7 @@ test('refuses a second process before Ladybug opens the store', () => {
 test('metadata and state directories preserve every shape input', () => {
   const temp = temporaryStore();
   try {
-    const metadata = { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7.0.2', tsymBuild: 'build', indexedCommit: 'abc', configSet: ['tsconfig.json'], configHashes: { 'tsconfig.json': 'config' }, packageHash: 'package', lockfileHash: 'lock', indexDurationMs: 0, files: { 'src/file.ts': { size: 7, mtimeMs: 12 } } };
+    const metadata = { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7.0.2', tsymBuild: 'build', root: temp.root, indexedCommit: 'abc', configSet: ['tsconfig.json'], configHashes: { 'tsconfig.json': 'config' }, packageHash: 'package', lockfileHash: 'lock', indexDurationMs: 0, files: { 'src/file.ts': 'hash' } };
     writeMetadata(temp.path, metadata);
     assert.deepEqual(readMetadata(temp.path), metadata);
     const paths = pathsForRoot(temp.root);

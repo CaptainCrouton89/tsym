@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { ingestCommits } from '../src/index/commits.js';
 import { describeFile } from '../src/index/descriptor.js';
 import { type DeclarationRow, loadGraph, replaceFiles } from '../src/store/load.js';
-import { canReuse, hasSourceDrift, hashTsymBuild, metadataFor } from '../src/store/meta.js';
+import { hasDrift, hashTsymBuild, metadataFor } from '../src/store/meta.js';
 import { query } from '../src/store/query.js';
 import { Store } from '../src/store/store.js';
+import { copyStore } from '../src/store/seed.js';
 import { ConfiguredProjects } from '../src/ts7/projects.js';
 import { Ts7Host } from '../src/ts7/api.js';
 import { watchIndex, type WatchBatch } from '../src/index/watch.js';
@@ -208,6 +209,30 @@ test('uses committed blob spans when the working tree is dirty', () => {
   } finally { subject.cleanup(); }
 });
 
+test('a copied store retains checkpoint history through a file replacement', () => {
+  const subject = fixture('export function tracked(): number { return 1; }\nexport function removed(): number { return 1; }\n');
+  const destination = path.join(subject.root, 'seeded-store');
+  try {
+    subject.commit('initial');
+    subject.write('export function tracked(): number { return 2; }\nexport function removed(): number { return 1; }\n');
+    const hash = subject.commit('track source edit');
+    const source = subject.load();
+    try {
+      ingestCommits(subject.root, source, [hash]);
+      source.checkpoint();
+      copyStore(source.path, destination);
+      const seeded = new Store(destination);
+      try {
+        const text = 'export function tracked(): number { return 2; }\n';
+        const graph = { declarations: describeFile('source.ts', text).filter((declaration) => declaration.scope !== 'excluded').map((declaration) => rowFor(text, declaration)), externals: [], relationships: [] };
+        replaceFiles(seeded, ['source.ts'], graph);
+        assert.deepEqual(changed(seeded), [{ key: 'source.ts#tracked', added: 1, removed: 1 }]);
+        assert.equal(query(seeded, "MATCH (:Commit)-[:CHANGED]->(d:Declaration) WHERE d.key = 'source.ts#removed' RETURN d.key").length, 0);
+      } finally { seeded.close(); }
+    } finally { source.close(); }
+  } finally { subject.cleanup(); }
+});
+
 test('graph refreshes retain checkpoint rows for declarations that remain', () => {
   const subject = fixture('export function tracked(): number { return 1; }\n');
   try {
@@ -317,7 +342,29 @@ test('tsym build hash changes with emitted JavaScript content and paths', () => 
   } finally { rmSync(dist, { recursive: true, force: true }); }
 });
 
-test('source drift reuses the graph shape and requests a refresh', () => {
+test('content-hash drift detects a same-size edit with restored mtime', () => {
+  const subject = fixture('export function source() { return 1; }\n');
+  const program = new Ts7Host(subject.root);
+  const projects = new ConfiguredProjects(subject.root, program);
+  try {
+    subject.commit('initial');
+    projects.load();
+    const before = metadataFor(subject.root, projects, git(subject.root, ['rev-parse', 'HEAD']).trim());
+    const source = path.join(subject.root, 'source.ts');
+    const timestamps = statSync(source);
+    subject.write('export function source() { return 2; }\n');
+    utimesSync(source, timestamps.atime, timestamps.mtime);
+    const after = metadataFor(subject.root, projects, before.indexedCommit);
+    assert.equal(after.files['source.ts']?.length, before.files['source.ts']?.length);
+    assert.notEqual(after.files['source.ts'], before.files['source.ts']);
+    assert.equal(hasDrift(before, after), true);
+  } finally {
+    program.close();
+    subject.cleanup();
+  }
+});
+
+test('source drift requests a refresh while a commit change is provenance only', () => {
   const subject = fixture('export function source() {}\n');
   const program = new Ts7Host(subject.root);
   const projects = new ConfiguredProjects(subject.root, program);
@@ -325,18 +372,18 @@ test('source drift reuses the graph shape and requests a refresh', () => {
     subject.commit('initial');
     projects.load();
     const before = metadataFor(subject.root, projects, git(subject.root, ['rev-parse', 'HEAD']).trim());
-    assert.equal(canReuse({ ...before, tsymBuild: 'different-build' }, before), false, 'tsym build');
+    assert.equal(hasDrift(before, { ...before, indexedCommit: 'another-commit' }), false, 'commit');
+    assert.equal(hasDrift({ ...before, tsymBuild: 'different-build' }, before), true, 'tsym build');
     subject.write('export function source() { return; }\n');
     const after = metadataFor(subject.root, projects, before.indexedCommit);
-    assert.equal(canReuse(before, after), true);
-    assert.equal(hasSourceDrift(before, after), true);
+    assert.equal(hasDrift(before, after), true);
   } finally {
     program.close();
     subject.cleanup();
   }
 });
 
-test('config-set, package-content, lockfile, and package-based inherited config changes invalidate persisted reuse', () => {
+test('config-set, package-content, lockfile, and package-based inherited config changes request refresh', () => {
   const subject = fixture('export function source() {}\n');
   const program = new Ts7Host(subject.root);
   const projects = new ConfiguredProjects(subject.root, program);
@@ -347,14 +394,14 @@ test('config-set, package-content, lockfile, and package-based inherited config 
     mkdirSync(path.join(subject.root, 'extra'));
     writeFileSync(path.join(subject.root, 'extra', 'tsconfig.json'), JSON.stringify({ include: ['../source.ts'] }));
     projects.reload();
-    assert.equal(canReuse(before, metadataFor(subject.root, projects, before.indexedCommit)), false, 'config set');
+    assert.equal(hasDrift(before, metadataFor(subject.root, projects, before.indexedCommit)), true, 'config set');
     rmSync(path.join(subject.root, 'extra'), { recursive: true });
     projects.reload();
     writeFileSync(path.join(subject.root, 'package.json'), '{"name":"changed"}\n');
-    assert.equal(canReuse(before, metadataFor(subject.root, projects, before.indexedCommit)), false, 'package content');
+    assert.equal(hasDrift(before, metadataFor(subject.root, projects, before.indexedCommit)), true, 'package content');
     writeFileSync(path.join(subject.root, 'package.json'), '{"name":"fixture"}\n');
     writeFileSync(path.join(subject.root, 'package-lock.json'), '{"lockfileVersion":4}\n');
-    assert.equal(canReuse(before, metadataFor(subject.root, projects, before.indexedCommit)), false, 'lockfile');
+    assert.equal(hasDrift(before, metadataFor(subject.root, projects, before.indexedCommit)), true, 'lockfile');
     writeFileSync(path.join(subject.root, 'package-lock.json'), '{"lockfileVersion":3}\n');
     mkdirSync(path.join(subject.root, 'node_modules', 'shared-config'), { recursive: true });
     writeFileSync(path.join(subject.root, 'node_modules', 'shared-config', 'package.json'), '{"name":"shared-config"}\n');
@@ -364,7 +411,7 @@ test('config-set, package-content, lockfile, and package-based inherited config 
     projects.reload();
     const packageConfigBefore = metadataFor(subject.root, projects, before.indexedCommit);
     writeFileSync(inherited, JSON.stringify({ compilerOptions: { strict: false } }));
-    assert.equal(canReuse(packageConfigBefore, metadataFor(subject.root, projects, before.indexedCommit)), false, 'package inherited config');
+    assert.equal(hasDrift(packageConfigBefore, metadataFor(subject.root, projects, before.indexedCommit)), true, 'package inherited config');
   } finally {
     program.close();
     subject.cleanup();

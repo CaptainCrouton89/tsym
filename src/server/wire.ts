@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Answer, Invocation, InvocationError, ToolError } from '../commands/types.js';
 
 export const WIRE_VERSION = 1;
-export type Operation = 'invoke' | 'status' | 'stop';
+export type Operation = 'invoke' | 'status' | 'stop' | 'seed';
 
 export interface WireInvocation { path: string[]; cwd: string; args: string[]; flags: Invocation['input']['flags']; explicit: string[]; }
 
@@ -12,6 +12,7 @@ export interface WireRequest {
   root: string;
   operation: Operation;
   invocation?: WireInvocation;
+  seed?: { dest: string };
 }
 
 export interface PhaseFrame {

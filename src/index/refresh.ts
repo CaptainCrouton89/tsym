@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { loadGraph, replaceFiles, type LoadReceipt, type RelationshipType, type StoreGraph } from '../store/load.js';
-import { metadataFor, writeMetadata } from '../store/meta.js';
+import { metadataFor, writeMetadata, type StoreFormatIdentity } from '../store/meta.js';
 import { Store } from '../store/store.js';
 import { Ts7Host } from '../ts7/api.js';
 import { ConfiguredProjects } from '../ts7/projects.js';
@@ -22,7 +22,7 @@ export interface RefreshResult {
 }
 
 /** Updates the TS7 snapshot, conservatively re-walks the union, then writes only changed file records. */
-export function refreshIndex(root: string, program: Ts7Host, projects: ConfiguredProjects, store: Store, previous: BuiltIndex, options: RefreshOptions): RefreshResult {
+export function refreshIndex(root: string, program: Ts7Host, projects: ConfiguredProjects, store: Store, previous: BuiltIndex, options: RefreshOptions, identity?: StoreFormatIdentity): RefreshResult {
   const started = performance.now();
   // The update carries a rewritten config's new text, so it must precede the rediscovery that reads membership from it.
   program.update({ fileChanges: options.fileChanges });
@@ -39,7 +39,7 @@ export function refreshIndex(root: string, program: Ts7Host, projects: Configure
     stored = 'files';
   }
   const durationMs = performance.now() - started;
-  writeMetadata(store.path, metadataFor(root, projects, headCommit(root), durationMs));
+  writeMetadata(store.path, metadataFor(root, projects, headCommit(root), durationMs, identity));
 
   let validation: RefreshResult['validation'] = 'off';
   if (options.validate) {

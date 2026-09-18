@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { createServer, type Socket } from 'node:net';
 import { appendFileSync, chmodSync, existsSync, openSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { discoverRoot, ensureStateDirectory, idleSeconds, pathsForRoot, publishState, removeEndpoint, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, WIRE_VERSION, type WireFrame, type WireRequest, writeFrame } from './wire.js';
 import { createSemanticContext } from './context.js';
@@ -11,7 +12,8 @@ import { ingestCommits } from '../index/commits.js';
 import { refreshIndex } from '../index/refresh.js';
 import { IndexStateController } from '../index/state.js';
 import { watchIndex, type IndexWatcher, type WatchBatch } from '../index/watch.js';
-import { canReuse, discardIncompatibleStore, hasSourceDrift, metadataFor, readMetadata, writeMetadata } from '../store/meta.js';
+import { discardIncompatibleStore, formatIdentity, hasDrift, metadataFor, readMetadata, writeMetadata } from '../store/meta.js';
+import { copyStore, refuseSeed, seedFromSibling } from '../store/seed.js';
 import { EngineBinaryError, Store } from '../store/store.js';
 import { executeSemantic } from '../commands/handlers.js';
 import { findNode } from '../commands/tree.js';
@@ -52,6 +54,7 @@ async function main(): Promise<void> {
   const bootedAt = new Date();
   const bootedAtMonotonic = performance.now();
   let bootstrapped = false;
+  let seededFrom: string | undefined;
   let loading = false;
   let stopping = false;
   let retired = false;
@@ -230,24 +233,34 @@ async function main(): Promise<void> {
           semantic ??= createSemanticContext(root);
           const { program, projects } = semantic;
           await projects.bootstrap();
-          if (discardIncompatibleStore(paths.store)) append(paths, 'discarded a store written by another tsym schema version');
+          const configured = projects.configured();
+          const identity = formatIdentity();
+          if (discardIncompatibleStore(paths.store, identity)) append(paths, 'discarded an incompatible store');
+          const expected = metadataFor(root, configured, headCommit(root), 0, identity);
+          if (!forceRebuild && readMetadata(paths.store) === null) {
+            const seeded = await seedFromSibling(root, paths, expected, identity);
+            if (seeded) {
+              seededFrom = seeded.root;
+              append(paths, `store seeded from ${seeded.root} differingFiles=${seeded.differingFiles} bytes=${seeded.bytes} duration=${Math.round(seeded.durationMs)}ms`);
+            } else append(paths, 'store seed skipped: no compatible sibling within 15%');
+          }
           store = new Store(paths.store);
           if (active) sendPhase(active.socket, active.request.requestId, 'index-build-start', remaining(loadDeadlineAt));
           // The watcher starts before the build, not after it: buildIndex takes tens of seconds on a large workspace,
           // and an edit landing in that window would otherwise never be recorded, publishing a stale index as current.
           // buildIndex is synchronous, so no watch callback can run until index is assigned below.
-          watcher = watchIndex(root, projects.configured(), refresh, (error) => append(paths, `index refresh failure: ${safe(error)}`), (flush) => index?.markStale(flush));
-          const configured = projects.configured();
-          const expected = metadataFor(root, configured, headCommit(root));
+          watcher = watchIndex(root, configured, refresh, (error) => append(paths, `index refresh failure: ${safe(error)}`), (flush) => index?.markStale(flush));
           const metadata = readMetadata(store.path);
           let built: ReturnType<typeof buildIndex>;
-          if (!forceRebuild && canReuse(metadata, expected)) {
+          if (!forceRebuild && metadata !== null) {
             const reused = reuseIndex(store);
-            built = hasSourceDrift(metadata!, expected)
-              ? refreshIndex(root, program, configured, store, reused, { fileChanges: { invalidateAll: true } }).built
-              : reused;
+            if (hasDrift(metadata, expected)) {
+              const refreshed = refreshIndex(root, program, configured, store, reused, { fileChanges: { invalidateAll: true } }, identity);
+              append(paths, `index refresh stored=${refreshed.stored} changedFiles=${refreshed.changedFiles.length} duration=${Math.round(refreshed.built.receipt.durationMs)}ms`);
+              built = refreshed.built;
+            } else built = reused;
           } else {
-            built = buildIndex(root, program, configured, store);
+            built = buildIndex(root, program, configured, store, identity);
           }
           index = new IndexStateController({ indexedAt: indexedAt(root), state: 'current', built }, (snapshot) => {
             semantic!.index = snapshot;
@@ -364,6 +377,20 @@ async function main(): Promise<void> {
       finishSocket(socket);
       return;
     }
+    if (request.operation === 'seed') {
+      const dest = request.seed?.dest;
+      const refusal = refuseSeed(dest, path.dirname(paths.state), bootstrapped && store !== undefined, store?.busy ?? false);
+      if (refusal) respond(socket, request.requestId, toolError('server-unavailable', refusal, 'Retry after the resident is ready with a new destination under the tsym cache.'));
+      else {
+        try {
+          store!.checkpoint();
+          const bytes = copyStore(paths.store, dest!);
+          respond(socket, request.requestId, { data: { element: 'seed', attributes: { root, store: dest, bytes } }, count: 1 });
+        } catch (error) { respond(socket, request.requestId, toolError('server-unavailable', 'The resident could not copy its store.', error instanceof Error ? error.message : 'Retry after the current refresh completes.')); }
+      }
+      finishSocket(socket);
+      return;
+    }
     if (request.operation === 'status' && forceRebuild && !bootstrapped) {
       try { await loadProjects(); }
       catch (error) {
@@ -385,7 +412,7 @@ async function main(): Promise<void> {
       const snapshot = index?.current();
       const receipt = snapshot?.built.receipt;
       const indexedCommit = readMetadata(paths.store)?.indexedCommit;
-      respond(socket, request.requestId, { data: { element: 'server', attributes: { root, state, pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s`, uptime: `${Math.floor(performance.now() - bootedAtMonotonic)}ms`, memory, typescript: semantic ? bundledTypeScriptVersion() : undefined, store: paths.store, indexedCommit, declarations: receipt?.declarations, edges: receipt ? Object.values(receipt.relationships).reduce((total, count) => total + count, 0) : undefined, notInProgram: semantic ? unconfiguredFileCount(root, semantic.projects.records()) : undefined, index: snapshot?.state, indexDuration: receipt ? `${Math.round(receipt.durationMs)}ms` : undefined } }, count: 1 });
+      respond(socket, request.requestId, { data: { element: 'server', attributes: { root, state, pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s`, uptime: `${Math.floor(performance.now() - bootedAtMonotonic)}ms`, memory, typescript: semantic ? bundledTypeScriptVersion() : undefined, store: paths.store, seededFrom, indexedCommit, declarations: receipt?.declarations, edges: receipt ? Object.values(receipt.relationships).reduce((total, count) => total + count, 0) : undefined, notInProgram: semantic ? unconfiguredFileCount(root, semantic.projects.records()) : undefined, index: snapshot?.state, indexDuration: receipt ? `${Math.round(receipt.durationMs)}ms` : undefined } }, count: 1 });
       return;
     }
     if (request.operation === 'stop') {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, watch } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -43,6 +44,172 @@ test('resident exits after its workspace root is deleted', async () => {
   }
 });
 
+test('a fresh root seeds from an indexed sibling and reports its source', async () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), 'tsym-seed-'));
+  const source = path.join(temporary, 'source');
+  const destination = path.join(temporary, 'destination');
+  const cache = mkdtempSync(path.join(tmpdir(), 'tsym-seed-cache-'));
+  cpSync(fixture, source, { recursive: true });
+  cpSync(fixture, destination, { recursive: true });
+  try {
+    const indexed = runAt(source, cache, ['outline']);
+    assert.equal(indexed.status, 0, indexed.stderr);
+    const seeded = runAt(destination, cache, ['outline']);
+    assert.equal(seeded.status, 0, seeded.stderr);
+    const status = runAt(destination, cache, ['server', 'status']);
+    assert.equal(status.status, 0, status.stderr);
+    assert.match(status.stdout, /seededFrom="[^"]+\/source"/);
+    const log = /log="([^"]+)"/.exec(status.stdout)?.[1];
+    assert.ok(log);
+    assert.match(readFileSync(log, 'utf8'), /store seeded from .+\/source differingFiles=0/);
+  } finally {
+    runAt(source, cache, ['server', 'stop']);
+    runAt(destination, cache, ['server', 'stop']);
+    rmSync(cache, { recursive: true, force: true });
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('a fresh root seeds from a dormant sibling and the sibling can start again', async () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), 'tsym-seed-dormant-'));
+  const source = path.join(temporary, 'source');
+  const destination = path.join(temporary, 'destination');
+  const cache = mkdtempSync(path.join(tmpdir(), 'tsym-seed-cache-'));
+  cpSync(fixture, source, { recursive: true });
+  cpSync(fixture, destination, { recursive: true });
+  try {
+    assert.equal(runAt(source, cache, ['outline']).status, 0);
+    await stopResident(source, cache);
+    const seeded = runAt(destination, cache, ['outline']);
+    assert.equal(seeded.status, 0, seeded.stderr);
+    const status = runAt(destination, cache, ['server', 'status']);
+    assert.match(status.stdout, /seededFrom="[^"]+\/source"/);
+    const restarted = runAt(source, cache, ['outline']);
+    assert.equal(restarted.status, 0, restarted.stderr);
+  } finally {
+    runAt(source, cache, ['server', 'stop']);
+    runAt(destination, cache, ['server', 'stop']);
+    rmSync(cache, { recursive: true, force: true });
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('a distant sibling is refused and the destination cold-builds', () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), 'tsym-seed-distant-'));
+  const source = path.join(temporary, 'source');
+  const destination = path.join(temporary, 'destination');
+  const cache = mkdtempSync(path.join(tmpdir(), 'tsym-seed-cache-'));
+  cpSync(fixture, source, { recursive: true });
+  cpSync(fixture, destination, { recursive: true });
+  try {
+    assert.equal(runAt(source, cache, ['outline']).status, 0);
+    for (const file of readdirSync(path.join(destination, 'src'))) {
+      if (file.endsWith('.ts')) writeFileSync(path.join(destination, 'src', file), `${readFileSync(path.join(destination, 'src', file), 'utf8')}\n// distinct sibling\n`);
+    }
+    const started = runAt(destination, cache, ['outline']);
+    assert.equal(started.status, 0, started.stderr);
+    const status = runAt(destination, cache, ['server', 'status']);
+    assert.doesNotMatch(status.stdout, /seededFrom=/);
+    const log = /log="([^"]+)"/.exec(status.stdout)?.[1];
+    assert.ok(log);
+    assert.match(readFileSync(log, 'utf8'), /store seed skipped: no compatible sibling within/);
+  } finally {
+    runAt(source, cache, ['server', 'stop']);
+    runAt(destination, cache, ['server', 'stop']);
+    rmSync(cache, { recursive: true, force: true });
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('a leftover interrupted seed is removed before a cold build', () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), 'tsym-seed-interrupted-'));
+  const root = path.join(temporary, 'destination');
+  const cache = mkdtempSync(path.join(tmpdir(), 'tsym-seed-cache-'));
+  cpSync(fixture, root, { recursive: true });
+  try {
+    const state = path.join(cache, 'tsym', createHash('sha256').update(realpathSync(root)).digest('hex').slice(0, 16));
+    const interrupted = path.join(state, 'store.seed');
+    mkdirSync(interrupted, { recursive: true });
+    writeFileSync(path.join(interrupted, 'graph.lbug'), 'partial');
+    const started = runAt(root, cache, ['outline']);
+    assert.equal(started.status, 0, started.stderr);
+    assert.ok(!existsSync(interrupted));
+    assert.ok(existsSync(path.join(state, 'store', 'meta.json')));
+    assert.ok(existsSync(path.join(state, 'store', 'graph.lbug')));
+  } finally {
+    runAt(root, cache, ['server', 'stop']);
+    rmSync(cache, { recursive: true, force: true });
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('server reload rebuilds an empty root without seeding', () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), 'tsym-seed-rebuild-'));
+  const source = path.join(temporary, 'source');
+  const destination = path.join(temporary, 'destination');
+  const cache = mkdtempSync(path.join(tmpdir(), 'tsym-seed-cache-'));
+  cpSync(fixture, source, { recursive: true });
+  cpSync(fixture, destination, { recursive: true });
+  try {
+    assert.equal(runAt(source, cache, ['outline']).status, 0);
+    const reloaded = runAt(destination, cache, ['server', 'reload']);
+    assert.equal(reloaded.status, 0, reloaded.stderr);
+    const status = runAt(destination, cache, ['server', 'status']);
+    assert.doesNotMatch(status.stdout, /seededFrom=/);
+    const log = /log="([^"]+)"/.exec(status.stdout)?.[1];
+    assert.ok(log);
+    assert.doesNotMatch(readFileSync(log, 'utf8'), /store seeded from/);
+  } finally {
+    runAt(source, cache, ['server', 'stop']);
+    runAt(destination, cache, ['server', 'stop']);
+    rmSync(cache, { recursive: true, force: true });
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('a branch switch refreshes files instead of cold-building and ignores commit provenance for identical content', async () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), 'tsym-branch-switch-'));
+  const root = path.join(temporary, 'fixture');
+  const cache = mkdtempSync(path.join(tmpdir(), 'tsym-branch-cache-'));
+  cpSync(fixture, root, { recursive: true });
+  try {
+    git(root, ['init']);
+    git(root, ['config', 'user.name', 'Test']);
+    git(root, ['config', 'user.email', 'test@example.com']);
+    git(root, ['add', '.']);
+    git(root, ['commit', '-m', 'A']);
+    const commitA = git(root, ['rev-parse', 'HEAD']).trim();
+    assert.equal(runAt(root, cache, ['outline']).status, 0);
+    await stopResident(root, cache);
+    git(root, ['checkout', '-b', 'topic']);
+    const changed = path.join(root, 'src', 'greet.ts');
+    const textB = `${readFileSync(changed, 'utf8')}\nexport const topic = true;\n`;
+    writeFileSync(changed, textB);
+    git(root, ['add', '.']);
+    git(root, ['commit', '-m', 'B']);
+    const commitB = git(root, ['rev-parse', 'HEAD']).trim();
+    const refreshed = runAt(root, cache, ['outline']);
+    assert.equal(refreshed.status, 0, refreshed.stderr);
+    let status = runAt(root, cache, ['server', 'status']);
+    assert.match(status.stdout, new RegExp(`indexedCommit="${commitB}"`));
+    const log = /log="([^"]+)"/.exec(status.stdout)?.[1];
+    assert.ok(log);
+    assert.match(readFileSync(log, 'utf8'), /index refresh stored=files/);
+    await stopResident(root, cache);
+    git(root, ['checkout', commitA]);
+    writeFileSync(changed, textB);
+    const reused = runAt(root, cache, ['outline']);
+    assert.equal(reused.status, 0, reused.stderr);
+    status = runAt(root, cache, ['server', 'status']);
+    assert.match(status.stdout, new RegExp(`indexedCommit="${commitB}"`));
+    assert.equal((readFileSync(log, 'utf8').match(/index refresh stored=/g) ?? []).length, 1);
+  } finally {
+    runAt(root, cache, ['server', 'stop']);
+    rmSync(cache, { recursive: true, force: true });
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test('resident status, lazy start, and stop use a private cache', async () => {
   const cache = mkdtempSync(path.join(tmpdir(), 'tsym-test-'));
   try {
@@ -80,6 +247,23 @@ test('resident status, lazy start, and stop use a private cache', async () => {
     rmSync(cache, { recursive: true, force: true });
   }
 });
+
+function git(root: string, args: string[]): string {
+  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout;
+}
+
+async function stopResident(root: string, cache: string): Promise<void> {
+  const status = runAt(root, cache, ['server', 'status']);
+  assert.equal(status.status, 0, status.stderr);
+  const port = /port="([^"]+)"/.exec(status.stdout)?.[1];
+  assert.ok(port);
+  const stopped = endpointRemoved(port, 20_000);
+  const result = runAt(root, cache, ['server', 'stop']);
+  assert.equal(result.status, 0, result.stderr);
+  await stopped;
+}
 
 async function processExited(pid: number, timeout: number): Promise<void> {
   const deadline = Date.now() + timeout;

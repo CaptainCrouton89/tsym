@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { loadGraph, readGraph, type DeclarationRow, type LoadReceipt, type RelationshipRow, type StoreGraph } from '../store/load.js';
-import { metadataFor, readMetadata, writeMetadata } from '../store/meta.js';
+import { metadataFor, readMetadata, writeMetadata, type StoreFormatIdentity } from '../store/meta.js';
 import { Store } from '../store/store.js';
 import { Ts7Host } from '../ts7/api.js';
 import { ConfiguredProjects } from '../ts7/projects.js';
@@ -22,13 +22,13 @@ export interface BuiltIndex {
 }
 
 /** Walks the configured project union, adds heritage facts, and atomically replaces the persisted graph. */
-export function buildIndex(root: string, program: Ts7Host, projects: ConfiguredProjects, store: Store): BuiltIndex {
+export function buildIndex(root: string, program: Ts7Host, projects: ConfiguredProjects, store: Store, identity?: StoreFormatIdentity): BuiltIndex {
   const started = performance.now();
   const walked = walkIndex(root, program, projects);
   const enriched = addHeritage(root, program, projects, walked);
   const loaded = loadGraph(store, storeGraph(enriched));
   const durationMs = performance.now() - started;
-  writeMetadata(store.path, metadataFor(root, projects, headCommit(root), durationMs));
+  writeMetadata(store.path, metadataFor(root, projects, headCommit(root), durationMs, identity));
   return {
     graph: enriched.graph,
     heritage: enriched.relationships,
@@ -46,7 +46,7 @@ export function buildIndex(root: string, program: Ts7Host, projects: ConfiguredP
 export function reuseIndex(store: Store): BuiltIndex {
   const persisted = readGraph(store);
   const metadata = readMetadata(store.path);
-  if (!metadata) throw new Error('reuseIndex requires persisted store metadata; canReuse must pass first.');
+  if (!metadata) throw new Error('reuseIndex requires persisted store metadata.');
   const durationMs = metadata.indexDurationMs;
   const declarations = new Map(persisted.declarations.map((declaration) => [declaration.key, declaration as DeclarationNode]));
   const externals = new Map(persisted.externals.map((external) => [external.key, external]));

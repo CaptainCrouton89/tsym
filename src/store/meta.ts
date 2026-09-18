@@ -7,15 +7,13 @@ import * as ts from 'ts5';
 import { STORE_SCHEMA_VERSION } from './schema.js';
 import type { ConfiguredProjects } from '../ts7/projects.js';
 
-export interface IndexedFileMeta {
-  size: number;
-  mtimeMs: number;
-}
+export type IndexedFileMeta = string;
 
 export interface StoreMetadata {
   schemaVersion: number;
   tsVersion: string;
   tsymBuild: string;
+  root: string;
   indexedCommit: string;
   configSet: string[];
   configHashes: Record<string, string>;
@@ -41,12 +39,12 @@ export function readMetadata(storePath: string): StoreMetadata | null {
   }
 }
 
-/** A store written by another schema version, or without readable metadata, cannot be read by this build; it is deleted so the next build starts from nothing. */
-export function discardIncompatibleStore(storePath: string): boolean {
+/** A store this build cannot read, or without readable metadata, is deleted so the next build starts from nothing. */
+export function discardIncompatibleStore(storePath: string, identity: StoreFormatIdentity): boolean {
   if (!existsSync(storePath)) return false;
   let metadata: StoreMetadata | null = null;
   try { metadata = readMetadata(storePath); } catch { metadata = null; }
-  if (metadata?.schemaVersion === STORE_SCHEMA_VERSION) return false;
+  if (metadata !== null && sameFormat(metadata, identity)) return false;
   rmSync(storePath, { recursive: true, force: true });
   return true;
 }
@@ -61,39 +59,39 @@ export function writeMetadata(storePath: string, metadata: StoreMetadata): void 
 }
 
 /** Captures every input whose change can alter the configured-program graph. */
-export function metadataFor(root: string, projects: ConfiguredProjects, indexedCommit: string, indexDurationMs = 0, tsVersion = bundledTsVersion()): StoreMetadata {
+export interface StoreFormatIdentity { schemaVersion: number; tsVersion: string; tsymBuild: string; }
+
+export function formatIdentity(tsVersion = bundledTsVersion()): StoreFormatIdentity {
+  return { schemaVersion: STORE_SCHEMA_VERSION, tsVersion, tsymBuild: hashTsymBuild() };
+}
+
+export function metadataFor(root: string, projects: ConfiguredProjects, indexedCommit: string, indexDurationMs = 0, identity = formatIdentity()): StoreMetadata {
   const configs = [...new Set(projects.records().map((project) => path.resolve(project.config)))].sort();
   const shapeConfigs = inheritedConfigs(configs);
   const files = [...new Set(projects.records().flatMap((project) => [...project.files]))].sort();
   return {
-    schemaVersion: STORE_SCHEMA_VERSION,
-    tsVersion,
-    tsymBuild: hashTsymBuild(),
+    ...identity,
+    root,
     indexedCommit,
     configSet: configs.map((file) => relative(root, file)),
     configHashes: Object.fromEntries(shapeConfigs.map((file) => [relative(root, file), hashFile(file)])),
     packageHash: hashOptional(path.join(root, 'package.json')),
     lockfileHash: lockfiles.map((name) => `${name}:${hashOptional(path.join(root, name))}`).join('|'),
     indexDurationMs,
-    files: Object.fromEntries(files.map((file) => {
-      const stat = statSync(file);
-      return [relative(root, file), { size: stat.size, mtimeMs: stat.mtimeMs }];
-    })),
+    files: Object.fromEntries(files.map((file) => [relative(root, file), hashFile(file)])),
   };
 }
 
-/** A persisted store can be rehydrated only when its schema, program shape, and checkpoint still match. */
-export function canReuse(metadata: StoreMetadata | null, expected: StoreMetadata): boolean {
-  return metadata !== null && JSON.stringify(shapeOf(metadata)) === JSON.stringify(shapeOf(expected));
+export function hasDrift(metadata: StoreMetadata, expected: StoreMetadata): boolean {
+  return JSON.stringify(driftShape(metadata)) !== JSON.stringify(driftShape(expected));
 }
 
-/** Source changes do not invalidate the graph shape; startup rehydrates then performs the ordinary refresh. */
-export function hasSourceDrift(metadata: StoreMetadata, expected: StoreMetadata): boolean {
-  return JSON.stringify(metadata.files) !== JSON.stringify(expected.files);
+export function sameFormat(metadata: Pick<StoreMetadata, 'schemaVersion' | 'tsVersion' | 'tsymBuild'>, identity: StoreFormatIdentity): boolean {
+  return metadata.schemaVersion === identity.schemaVersion && metadata.tsVersion === identity.tsVersion && metadata.tsymBuild === identity.tsymBuild;
 }
 
-function shapeOf(metadata: StoreMetadata): Omit<StoreMetadata, 'files' | 'indexDurationMs'> {
-  const { files: _files, indexDurationMs: _duration, ...shape } = metadata;
+function driftShape(metadata: StoreMetadata): Omit<StoreMetadata, 'indexedCommit' | 'indexDurationMs'> {
+  const { indexedCommit: _commit, indexDurationMs: _duration, ...shape } = metadata;
   return shape;
 }
 
