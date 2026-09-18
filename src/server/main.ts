@@ -11,7 +11,7 @@ import { ingestCommits } from '../index/commits.js';
 import { refreshIndex } from '../index/refresh.js';
 import { IndexStateController } from '../index/state.js';
 import { watchIndex, type IndexWatcher, type WatchBatch } from '../index/watch.js';
-import { canReuse, hasSourceDrift, metadataFor, readMetadata, writeMetadata } from '../store/meta.js';
+import { canReuse, discardIncompatibleStore, hasSourceDrift, metadataFor, readMetadata, writeMetadata } from '../store/meta.js';
 import { EngineBinaryError, Store } from '../store/store.js';
 import { executeSemantic } from '../commands/handlers.js';
 import { findNode } from '../commands/tree.js';
@@ -230,6 +230,7 @@ async function main(): Promise<void> {
           semantic ??= createSemanticContext(root);
           const { program, projects } = semantic;
           await projects.bootstrap();
+          if (discardIncompatibleStore(paths.store)) append(paths, 'discarded a store written by another tsym schema version');
           store = new Store(paths.store);
           if (active) sendPhase(active.socket, active.request.requestId, 'index-build-start', remaining(loadDeadlineAt));
           // The watcher starts before the build, not after it: buildIndex takes tens of seconds on a large workspace,
@@ -260,6 +261,11 @@ async function main(): Promise<void> {
       bootstrapped = true;
     } finally {
       if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (!bootstrapped) {
+        // A failed load must leave nothing open, or the next attempt fails on store ownership instead of its real cause.
+        watcher?.close(); watcher = undefined;
+        store?.close(); store = undefined;
+      }
       loading = false;
       loadDeadlineAt = undefined;
       if (!timedOut && !retired) {

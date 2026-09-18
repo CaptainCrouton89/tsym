@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { Connection, Database } from '@ladybugdb/core';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { loadGraph, readGraph, replaceFile, replaceFiles, type DeclarationRow, type RelationshipRow, type StoreGraph } from '../src/store/load.js';
-import { readMetadata, writeMetadata } from '../src/store/meta.js';
+import { discardIncompatibleStore, readMetadata, writeMetadata } from '../src/store/meta.js';
 import { query } from '../src/store/query.js';
 import { STORE_SCHEMA_VERSION } from '../src/store/schema.js';
 import { Store } from '../src/store/store.js';
@@ -42,6 +42,25 @@ async function killAfter(child: ReturnType<typeof spawn>, text: string): Promise
   child.kill('SIGKILL');
   await once(child, 'exit');
 }
+
+test('a store from another schema version is discarded whole; the current version is kept', () => {
+  const { root, path: storePath } = temporaryStore();
+  try {
+    assert.equal(discardIncompatibleStore(storePath), false);
+    mkdirSync(storePath, { recursive: true });
+    assert.equal(discardIncompatibleStore(storePath), true, 'a store without metadata is unreadable');
+    mkdirSync(storePath, { recursive: true });
+    writeMetadata(storePath, { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7', tsymBuild: 'b', indexedCommit: '', configSet: [], configHashes: {}, packageHash: '', lockfileHash: '', indexDurationMs: 0, files: {} });
+    assert.equal(discardIncompatibleStore(storePath), false);
+    assert.ok(readMetadata(storePath));
+    const stale = { ...readMetadata(storePath)!, schemaVersion: STORE_SCHEMA_VERSION - 1 };
+    rmSync(storePath, { recursive: true, force: true });
+    mkdirSync(storePath, { recursive: true });
+    writeFileSync(path.join(storePath, 'meta.json'), JSON.stringify(stale));
+    assert.equal(discardIncompatibleStore(storePath), true);
+    assert.equal(readMetadata(storePath), null);
+  } finally { remove(root); }
+});
 
 test('schema supports every relationship and pair-qualified COPY', () => {
   const temp = temporaryStore();

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ts from 'ts5';
@@ -39,6 +39,16 @@ export function readMetadata(storePath: string): StoreMetadata | null {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
+}
+
+/** A store written by another schema version, or without readable metadata, cannot be read by this build; it is deleted so the next build starts from nothing. */
+export function discardIncompatibleStore(storePath: string): boolean {
+  if (!existsSync(storePath)) return false;
+  let metadata: StoreMetadata | null = null;
+  try { metadata = readMetadata(storePath); } catch { metadata = null; }
+  if (metadata?.schemaVersion === STORE_SCHEMA_VERSION) return false;
+  rmSync(storePath, { recursive: true, force: true });
+  return true;
 }
 
 export function writeMetadata(storePath: string, metadata: StoreMetadata): void {
