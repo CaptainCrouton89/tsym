@@ -326,7 +326,15 @@ async function main(): Promise<void> {
         if (!retired) respond(queued.socket, queued.request.requestId, { category: 'tool', code: error.code, attributes: { platform: error.platform }, message: error.message });
         return;
       }
-      if (!retired) respond(queued.socket, queued.request.requestId, toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.'));
+      if (!retired) {
+        if (!bootstrapped) respond(queued.socket, queued.request.requestId, toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.'));
+        else {
+          append(paths, `command failed command=${currentCommand ?? 'unknown'}\n${error instanceof Error && error.stack ? error.stack : safe(error)}`);
+          const failure = toolError('command-failed', safe(error), 'Read the resident log, then retry the command.');
+          failure.received = currentCommand ?? 'unknown';
+          respond(queued.socket, queued.request.requestId, failure);
+        }
+      }
     } finally {
       if (activeTimer) clearTimeout(activeTimer);
       activeTimer = undefined;

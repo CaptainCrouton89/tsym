@@ -320,6 +320,18 @@ test('metadata and state directories preserve every shape input', () => {
   } finally { remove(temp.root); }
 });
 
+test('collects a result larger than V8 accepts as spread arguments', { timeout: 30_000 }, () => {
+  const temp = temporaryStore();
+  const store = new Store(temp.path);
+  try {
+    loadGraph(store, { declarations: Array.from({ length: 130_000 }, (_, index) => declaration(`src/generated.ts#d${index}`, 'src/generated.ts')), externals: [], relationships: [] });
+    assert.equal(query(store, 'MATCH (d:Declaration) RETURN d.key AS key').length, 130_000);
+  } finally {
+    store.close();
+    remove(temp.root);
+  }
+});
+
 test('bulk loads the prototype-load upper-bound graph', { timeout: 30_000 }, () => {
   const temp = temporaryStore();
   const store = new Store(temp.path);

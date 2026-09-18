@@ -14,14 +14,12 @@ const handler: SemanticHandler = async (context, invocation) => {
   const prefix = flags['--prefix'] === true;
   const qualified = name.includes('.');
   const rows = new Map<string, FindRow>();
-  for (const declaration of declarations(context)) {
-    const candidate = qualified ? declaration.qualifiedName : declaration.name;
-    if (declaration.kind === 'module' || !(prefix ? candidate.startsWith(name) : candidate === name) || !keep(declaration, flags)) continue;
+  for (const declaration of declarations(context, name, qualified, prefix)) {
+    if (declaration.kind === 'module' || !keep(declaration, flags)) continue;
     rows.set(declaration.address, declaration);
   }
-  for (const alias of aliases(context)) {
-    const candidate = alias.qualifiedName;
-    if (!(prefix ? candidate.startsWith(name) : candidate === name) || !keep(alias, flags)) continue;
+  for (const alias of aliases(context, name, prefix)) {
+    if (!keep(alias, flags)) continue;
     rows.set(alias.address, alias);
   }
   const sorted = [...rows.values()].sort((a, b) => a.path.localeCompare(b.path) || numericAddress(a.address, b.address));
@@ -35,14 +33,17 @@ const handler: SemanticHandler = async (context, invocation) => {
   };
 };
 
-function declarations(context: Parameters<SemanticHandler>[0]): FindRow[] {
+function declarations(context: Parameters<SemanticHandler>[0], name: string, qualified: boolean, prefix: boolean): FindRow[] {
   if (!context.store) throw new DeclarationError('not-in-program', 'The TypeScript index is not available yet.');
-  return query(context.store, 'MATCH (d:Declaration) RETURN d.at AS at, d.file AS file, d.kind AS kind, d.exported AS exported, d.name AS name, d.qname AS qname').map((row) => ({ address: String(row.at), path: String(row.file), kind: String(row.kind), exported: Boolean(row.exported), name: String(row.name), qualifiedName: String(row.qname) }));
+  const property = qualified ? 'qname' : 'name';
+  const comparison = prefix ? 'STARTS WITH' : '=';
+  return query(context.store, `MATCH (d:Declaration) WHERE d.${property} ${comparison} $name RETURN d.at AS at, d.file AS file, d.kind AS kind, d.exported AS exported, d.name AS name, d.qname AS qname`, { name }).map((row) => ({ address: String(row.at), path: String(row.file), kind: String(row.kind), exported: Boolean(row.exported), name: String(row.name), qualifiedName: String(row.qname) }));
 }
 
-function aliases(context: Parameters<SemanticHandler>[0]): FindRow[] {
+function aliases(context: Parameters<SemanticHandler>[0], name: string, prefix: boolean): FindRow[] {
   if (!context.store) throw new DeclarationError('not-in-program', 'The TypeScript index is not available yet.');
-  return query(context.store, 'MATCH (m:Declaration)-[e:EXPORTS]->(d:Declaration) RETURN m.file AS fromFile, e.name AS name, e.line AS line, e.col AS col, d.file AS file, d.line AS declarationLine, d.col AS declarationCol').flatMap((row: StoreRow) => {
+  const comparison = prefix ? 'STARTS WITH' : '=';
+  return query(context.store, `MATCH (m:Declaration)-[e:EXPORTS]->(d:Declaration) WHERE e.name ${comparison} $name RETURN m.file AS fromFile, e.name AS name, e.line AS line, e.col AS col, d.file AS file, d.line AS declarationLine, d.col AS declarationCol`, { name }).flatMap((row: StoreRow) => {
     const fromFile = String(row.fromFile);
     const line = Number(row.line);
     const col = Number(row.col);

@@ -157,7 +157,7 @@ function collect(result: QueryResult | QueryResult[]): StoreRow[] {
   const results = Array.isArray(result) ? result : [result];
   const rows: StoreRow[] = [];
   for (const item of results) {
-    try { rows.push(...item.getAllSync()); } finally { item.close(); }
+    try { for (const row of item.getAllSync()) rows.push(row); } finally { item.close(); }
   }
   return rows;
 }
