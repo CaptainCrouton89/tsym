@@ -91,7 +91,7 @@ export function replaceFiles(store: Store, files: readonly string[], graph: Stor
   validateGraph(graph);
   return store.transaction(() => {
     const history = checkpointHistory(store, replaced);
-    for (const file of replaced) store.execute(`MATCH (d:Declaration) WHERE d.file = ${literal(file)} DETACH DELETE d`);
+    if (replaced.size > 0) store.execute('MATCH (d:Declaration) WHERE d.file IN $files DETACH DELETE d', { files: [...replaced] });
     copyRows(store, 'Declaration', declarationColumns, graph.declarations);
     copyMissingExternals(store, graph.externals);
     copyMissingCommits(store, graph.commits ?? []);

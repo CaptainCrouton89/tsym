@@ -20,8 +20,9 @@ const handler: SemanticHandler = async (context, invocation) => {
   const depth = flags['--depth'] as number;
   const scope = await scopeFiles(context, invocation.cwd, invocation.input.args);
   const selected = new Set(scope.files.map((file) => displayPath(context.root, file)).filter((file) => matchesPathFilters(file, { in: flags['--in'] as string[] | undefined, exclude: flags['--exclude'] as string[] | undefined })));
-  const declarations = [...selected].flatMap((file) => indexed(context, file)).filter((declaration) => declaration.kind !== 'module');
-  const imports = flags['--imports'] === true && flags['--exported'] !== true && !flags['--kind'] ? [...selected].flatMap((file) => indexedImports(context, file)) : [];
+  const selectedFiles = [...selected];
+  const declarations = indexed(context, selectedFiles).filter((declaration) => declaration.kind !== 'module');
+  const imports = flags['--imports'] === true && flags['--exported'] !== true && !flags['--kind'] ? indexedImports(context, selectedFiles) : [];
   const directory = invocation.input.args.length === 0 ? context.root : invocation.input.args.map((input) => path.resolve(invocation.cwd, input)).find((candidate) => {
     try { return statSync(candidate).isDirectory(); } catch { return false; }
   });
@@ -51,18 +52,18 @@ function directFile(invocation: Parameters<SemanticHandler>[1]): string | undefi
   try { return statSync(candidate).isFile() ? candidate : undefined; } catch { return undefined; }
 }
 
-function indexed(context: Parameters<SemanticHandler>[0], file: string): Declaration[] {
+function indexed(context: Parameters<SemanticHandler>[0], files: readonly string[]): Declaration[] {
   if (!context.store) throw new DeclarationError('not-in-program', 'The TypeScript index is not available yet.');
-  return query(context.store, 'MATCH (d:Declaration) WHERE d.file = $file RETURN d.key AS key, d.at AS at, d.name AS name, d.qname AS qname, d.kind AS kind, d.exported AS exported, d.file AS file, d.line AS line, d.col AS col, d.lines AS lines, d.container AS container', { file }).map(declaration);
+  return files.length === 0 ? [] : query(context.store, 'MATCH (d:Declaration) WHERE d.file IN $files RETURN d.key AS key, d.at AS at, d.name AS name, d.qname AS qname, d.kind AS kind, d.exported AS exported, d.file AS file, d.line AS line, d.col AS col, d.lines AS lines, d.container AS container', { files: [...files] }).map(declaration);
 }
 
 function declaration(row: StoreRow): Declaration {
   return { key: String(row.key), address: String(row.at), path: String(row.file), name: String(row.name), qualifiedName: String(row.qname), kind: String(row.kind), exported: Boolean(row.exported), line: Number(row.line), col: Number(row.col), lines: Number(row.lines), container: row.container === null ? null : String(row.container) };
 }
 
-function indexedImports(context: Parameters<SemanticHandler>[0], file: string): Import[] {
+function indexedImports(context: Parameters<SemanticHandler>[0], files: readonly string[]): Import[] {
   if (!context.store) throw new DeclarationError('not-in-program', 'The TypeScript index is not available yet.');
-  return query(context.store, 'MATCH (m:Declaration)-[e:IMPORTS]->(d:Declaration) WHERE m.file = $file RETURN m.file AS file, e.line AS line, e.names AS names, d.file AS target UNION MATCH (m:Declaration)-[e:IMPORTS]->(external:External) WHERE m.file = $file RETURN m.file AS file, e.line AS line, e.names AS names, external.module AS target', { file })
+  return files.length === 0 ? [] : query(context.store, 'MATCH (m:Declaration)-[e:IMPORTS]->(d:Declaration) WHERE m.file IN $files RETURN m.file AS file, e.line AS line, e.names AS names, d.file AS target UNION MATCH (m:Declaration)-[e:IMPORTS]->(external:External) WHERE m.file IN $files RETURN m.file AS file, e.line AS line, e.names AS names, external.module AS target', { files: [...files] })
     .map((row) => ({ path: String(row.file), line: Number(row.line), address: `${String(row.file)}:${Number(row.line)}:1`, name: String(row.names), target: String(row.target) }));
 }
 

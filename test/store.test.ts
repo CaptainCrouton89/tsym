@@ -206,6 +206,30 @@ test('replaces circular files after every replacement declaration exists', () =>
   }
 });
 
+test('replaces multiple files with one delete query', () => {
+  const temp = temporaryStore();
+  const store = new Store(temp.path);
+  try {
+    loadGraph(store, { declarations: [declaration('src/a.ts#old', 'src/a.ts'), declaration('src/b.ts#old', 'src/b.ts')], externals: [], relationships: [] });
+    const execute = store.execute.bind(store);
+    const calls: Parameters<Store['execute']>[] = [];
+    store.execute = (...args) => {
+      calls.push(args);
+      return execute(...args);
+    };
+    replaceFiles(store, ['src/a.ts', 'src/b.ts'], {
+      declarations: [declaration('src/a.ts#new', 'src/a.ts'), declaration('src/b.ts#new', 'src/b.ts')],
+      externals: [],
+      relationships: [],
+    });
+    const deletes = calls.filter(([statement]) => statement.includes('DETACH DELETE d'));
+    assert.deepEqual(deletes, [['MATCH (d:Declaration) WHERE d.file IN $files DETACH DELETE d', { files: ['src/a.ts', 'src/b.ts'] }]]);
+  } finally {
+    store.close();
+    remove(temp.root);
+  }
+});
+
 test('replaces 219 declarations and 2,219 incoming relationships below 250 ms', () => {
   const temp = temporaryStore();
   const store = new Store(temp.path);
