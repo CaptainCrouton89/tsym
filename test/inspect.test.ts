@@ -73,7 +73,12 @@ test('inspect follows both interface implementations and reports one dispatch si
 
     const membersOnly = run('inspect', 'Greeter', '--only', 'members', '--each', '1');
     assert.match(membersOnly.stdout, /<members count="6" files="1" shown="1">/);
-    assert.match(membersOnly.stderr, /0 counts cover indexed, compiler-resolved relations only; framework, HTTP, and dependency-injection invocation are not visible/);
+    assert.doesNotMatch(membersOnly.stderr, /0 counts cover indexed/);
+
+    const callable = run('inspect', 'shout', '--each', '0');
+    assert.equal(callable.status, 0, callable.stderr);
+    assert.match(callable.stdout, /<impl count="0"\/>/);
+    assert.doesNotMatch(callable.stderr, /0 counts cover indexed/);
 
     const implementationMembers = run('inspect', 'FirstSink', '--only', 'members', '--each', '0');
     assert.match(implementationMembers.stdout, /FirstSink\.send  \(3 callers, 1 calls\)/);
