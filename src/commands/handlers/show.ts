@@ -8,21 +8,22 @@ const handler: SemanticHandler = async (context, invocation) => {
   await context.projects.bootstrap();
   const started = performance.now();
   const resolved = await context.resolver.resolveAll(invocation.input.args);
-  const rendered = [];
+  const rendered: Array<{ node: { element: string; attributes: { at: string; name: string; kind: string; lines: number }; text: string }; files: string[] }> = [];
   for (const declaration of resolved) {
     const source = context.source.read(declaration.file);
     const span = storedSpan(context, declaration);
-    const sites = declaration.location.line === 0 ? [{ source, span }] : await declarationSites(context, declaration, span);
+    const sites = declaration.location.line === 0 ? [{ file: declaration.file, source, span }] : await declarationSites(context, declaration, span);
     const text = declaration.location.line === 0 ? source : sites.map((site) => declarationText(site.source, site.span)).join('\n');
     const lines = declaration.location.line === 0 ? sourceLines(source) : sites.reduce((total, site) => total + site.span.lines, 0);
-    rendered.push({ element: 'symbol', attributes: { at: declaration.address, name: declaration.name, kind: declaration.kind, lines }, text });
+    rendered.push({ node: { element: 'symbol', attributes: { at: declaration.address, name: declaration.name, kind: declaration.kind, lines }, text }, files: sites.map((site) => site.file) });
   }
   const limit = invocation.input.flags['--limit'] as number | undefined;
   const shown = limit === undefined ? rendered : rendered.slice(0, limit);
   const capped = shown.length < rendered.length;
   return {
-    data: { element: 'show', attributes: { count: rendered.length, shown: capped ? shown.length : undefined }, children: shown },
+    data: { element: 'show', attributes: { count: rendered.length, shown: capped ? shown.length : undefined }, children: shown.map((item) => item.node) },
     count: rendered.length,
+    displayedFiles: [...new Set(shown.flatMap((item) => item.files))],
     receipt: capped ? `${shown.length} of ${rendered.length} show rows shown, limit ${limit}, ${Math.round(performance.now() - started)} ms` : `${shown.length} show declaration${shown.length === 1 ? '' : 's'}, ${Math.round(performance.now() - started)} ms`,
   };
 };
@@ -34,8 +35,8 @@ function storedSpan(context: Parameters<SemanticHandler>[0], declaration: Declar
   return { endLine: Number(row.endLine), lines: Number(row.lines), declCount: Number(row.declCount) };
 }
 
-async function declarationSites(context: Parameters<SemanticHandler>[0], declaration: DeclarationRecord, stored: StoredSpan): Promise<Array<{ source: string; span: StoredSpan }>> {
-  if (stored.declCount === 1) return [{ source: context.source.read(declaration.file), span: stored }];
+async function declarationSites(context: Parameters<SemanticHandler>[0], declaration: DeclarationRecord, stored: StoredSpan): Promise<Array<{ file: string; source: string; span: StoredSpan }>> {
+  if (stored.declCount === 1) return [{ file: declaration.file, source: context.source.read(declaration.file), span: stored }];
   const membership = await context.projects.membership(declaration.file);
   if (!membership) throw new DeclarationError('not-in-program', `${declaration.location.path} exists but is not part of a TypeScript project under ${context.root}`);
   const sites = context.program.withSnapshot((snapshot) => {
@@ -48,7 +49,7 @@ async function declarationSites(context: Parameters<SemanticHandler>[0], declara
       const source = node.getSourceFile();
       const start = source.getLineAndCharacterOfPosition(node.getStart(source));
       const end = source.getLineAndCharacterOfPosition(node.getEnd());
-      return [{ source: context.source.read(source.fileName), span: { endLine: end.line + 1, lines: end.line - start.line + 1, declCount: stored.declCount } }];
+      return [{ file: source.fileName, source: context.source.read(source.fileName), span: { endLine: end.line + 1, lines: end.line - start.line + 1, declCount: stored.declCount } }];
     });
   });
   if (sites.length === 0) throw new DeclarationError('unresolvable-symbol', `${declaration.address} has no declaration sites in the TypeScript program`);

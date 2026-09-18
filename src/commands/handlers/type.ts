@@ -10,6 +10,7 @@ const handler: SemanticHandler = async (context, invocation) => {
     const declarations = await context.resolver.resolveAll(invocation.input.args);
     const includeDefinition = invocation.input.flags['--def'] === true;
     const symbols: Array<{ element: string; attributes: Record<string, string | undefined>; text?: string; children?: Array<{ element: string; attributes?: Record<string, string>; text: string }> }> = [];
+    const displayedFiles: string[] = [];
     let answers = 0;
 
     for (const declaration of declarations) {
@@ -18,9 +19,10 @@ const handler: SemanticHandler = async (context, invocation) => {
       const answer = typeAt(context.program, context.root, project.config, declaration.file, declaration.nameSpan.start, { ...declaration, kind: normalKind(declaration.kind) });
       if (answer !== null) answers++;
       symbols.push(renderSymbol(declaration, answer, includeDefinition));
+      displayedFiles.push(declaration.file);
     }
 
-    return { data: { element: 'type', children: symbols }, count: answers };
+    return { data: { element: 'type', children: symbols }, count: answers, displayedFiles: [...new Set(displayedFiles)] };
   } catch (error) {
     if (error instanceof DeclarationError || error instanceof DeclarationResolutionErrors) throw error;
     return failure(error);

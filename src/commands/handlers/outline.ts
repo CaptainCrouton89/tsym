@@ -10,7 +10,7 @@ import type { SemanticHandler } from '../handlers.js';
 
 interface Declaration { key: string; address: string; path: string; name: string; qualifiedName: string; kind: string; exported: boolean; line: number; col: number; lines: number; container: string | null; }
 interface Import { address: string; path: string; line: number; name: string; target: string; }
-interface Row { text: string; line: number; col: number; }
+interface Row { text: string; line: number; col: number; file?: string; }
 const containers = new Set(['class', 'interface', 'enum', 'namespace']);
 
 const handler: SemanticHandler = async (context, invocation) => {
@@ -26,6 +26,7 @@ const handler: SemanticHandler = async (context, invocation) => {
     try { return statSync(candidate).isDirectory(); } catch { return false; }
   });
   const requestedDirectory = directory !== undefined;
+  const outlinedFile = directFile(invocation);
   const files = new Map<string, Declaration[]>();
   for (const declaration of declarations) files.set(declaration.path, [...(files.get(declaration.path) ?? []), declaration]);
   const importsByFile = new Map<string, Import[]>();
@@ -35,14 +36,20 @@ const handler: SemanticHandler = async (context, invocation) => {
   }
   const rows = requestedDirectory && depth === 1
     ? containerRows(context.root, files, importsByFile, flags, directory ?? context.root)
-    : [...files.entries()].flatMap(([file, items]) => [...select(items, flags, requestedDirectory ? depth - 1 : depth).map((symbol) => symbolRow(symbol, items, flags)), ...(importsByFile.get(file) ?? []).map(importRow)].sort(byPosition));
+    : [...files.entries()].flatMap(([file, items]) => [...select(items, flags, requestedDirectory ? depth - 1 : depth).map((symbol) => symbolRow(context.root, symbol, items, flags)), ...(importsByFile.get(file) ?? []).map(importRow)].sort(byPosition));
   const limit = flags['--limit'] as number | undefined;
   const shown = limit === undefined ? rows : rows.slice(0, limit);
   const capped = shown.length < rows.length;
   const symbols = [...files.values()].flatMap((items) => select(items, flags, requestedDirectory ? depth - 1 : depth)).length + imports.length;
   const receipt = `${capped ? `${shown.length} of ${rows.length} outline rows shown, limit ${limit}` : `${shown.length} outline row${shown.length === 1 ? '' : 's'}`}${scope.notInProgram > 0 ? `, ${scope.notInProgram} not in program` : ''}, ${Math.round(performance.now() - started)} ms`;
-  return { data: { element: 'outline', attributes: { path: invocation.input.args.join(' ') || '.', depth, symbols, files: files.size, count: rows.length, shown: capped ? shown.length : undefined }, text: shown.map((row) => row.text).join('\n') }, count: rows.length, receipt };
+  return { data: { element: 'outline', attributes: { path: invocation.input.args.join(' ') || '.', depth, symbols, files: files.size, count: rows.length, shown: capped ? shown.length : undefined }, text: shown.map((row) => row.text).join('\n') }, count: rows.length, displayedFiles: outlinedFile && shown.length > 0 ? [outlinedFile] : [...new Set(shown.flatMap((row) => row.file ? [row.file] : []))], receipt };
 };
+
+function directFile(invocation: Parameters<SemanticHandler>[1]): string | undefined {
+  if (invocation.input.args.length !== 1) return undefined;
+  const candidate = path.resolve(invocation.cwd, invocation.input.args[0]!);
+  try { return statSync(candidate).isFile() ? candidate : undefined; } catch { return undefined; }
+}
 
 function indexed(context: Parameters<SemanticHandler>[0]): Declaration[] {
   if (!context.store) throw new DeclarationError('not-in-program', 'The TypeScript index is not available yet.');
@@ -76,10 +83,10 @@ function keep(item: Declaration, flags: Record<string, boolean | number | string
   return (!kinds || kinds.includes(item.kind)) && (flags['--exported'] !== true || item.exported);
 }
 
-function symbolRow(symbol: Declaration, items: readonly Declaration[], flags: Record<string, boolean | number | string | string[]>): Row {
+function symbolRow(root: string, symbol: Declaration, items: readonly Declaration[], flags: Record<string, boolean | number | string | string[]>): Row {
   const members = items.filter((item) => item.container === symbol.key && keep(item, flags)).length;
   const memberCount = containers.has(symbol.kind) ? `, ${members} members` : '';
-  return { text: `${symbol.address}  ${symbol.kind}${symbol.exported ? '  export' : ''}  ${symbol.qualifiedName}  (${symbol.lines}L${memberCount})`, line: symbol.line, col: symbol.col };
+  return { text: `${symbol.address}  ${symbol.kind}${symbol.exported ? '  export' : ''}  ${symbol.qualifiedName}  (${symbol.lines}L${memberCount})`, line: symbol.line, col: symbol.col, file: path.join(root, symbol.path) };
 }
 
 function importRow(item: Import): Row { return { text: `${item.address}  import  ${item.name}  ${item.target}`, line: item.line, col: 1 }; }

@@ -12,7 +12,7 @@ export function renderHelp(node: CommandDeclaration, serverState = '<server stat
   if (node.effects) lines.push(`<effects>${node.effects}</effects>`);
   if (node === commandTree) {
     lines.push('<globals>\n  <flag name="--root" type="path">Workspace root, overriding discovery from the current directory.</flag>\n  <flag name="--json" type="bool">Raw JSON on stdout for programmatic consumers.</flag>\n</globals>');
-    lines.push('<io>Flags and positional arguments on input. Stdout is one named XML block per call. One receipt goes to stderr on every call. Exit 0 with results, 1 with none, 2 when the invocation was wrong, 3 when the tool could not answer.</io>');
+    lines.push('<io>Flags and positional arguments on input. Stdout is one named XML block per call. Prose output of show, type, or outline may be preceded by an &lt;auto-loaded-context&gt; block when run inside a crtr node. One receipt goes to stderr on every call. Exit 0 with results, 1 with none, 2 when the invocation was wrong, 3 when the tool could not answer.</io>');
   }
   return xml('command', { name: node.name, description: node.description }, lines.join('\n'));
 }

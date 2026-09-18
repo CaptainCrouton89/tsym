@@ -88,6 +88,12 @@ export interface Answer {
   data: OutputNode | OutputNode[];
   count: number;
   receipt?: string;
+  /** Files whose declarations this result displayed; carried over the resident wire but never rendered. */
+  displayedFiles?: string[];
+  /** Read-routed memory returned by the client-side crouter call; never included in tsym JSON. */
+  context?: string;
+  /** Structured context-delivery failure written to stderr without changing the command result. */
+  contextError?: string;
 }
 
 export type Completion = Answer | InvocationError | ToolError;

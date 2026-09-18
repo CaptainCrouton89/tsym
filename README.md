@@ -44,7 +44,7 @@ The bundled TypeScript 7 process is always used, so `tsym` works in a checkout w
 
 ## Using it from crtr
 
-`tsym` is available inside [crtr](https://www.npmjs.com/package/@north-light/crouter) as `crtr tsym` via the `tsym` plugin in the crouter official marketplace. The plugin passes through to this executable, so it must be on `PATH`.
+`tsym` is available inside [crtr](https://www.npmjs.com/package/@north-light/crouter) as `crtr tsym` via the `tsym` plugin in the crouter official marketplace. The plugin passes through to this executable, so it must be on `PATH`. Prose output of `show`, `type`, or `outline` may be preceded by an `<auto-loaded-context>` block when run inside a crtr node.
 
 ## License
 

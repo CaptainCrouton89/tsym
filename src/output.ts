@@ -11,7 +11,7 @@ export function escapeAttribute(value: string): string { return value.replace(/"
 
 export function renderCompletion(completion: Completion, json: boolean): { stdout: string; stderr: string; exitCode: 0 | 1 | 2 | 3 } {
   const exitCode = completionCode(completion);
-  const payload = json ? JSON.stringify(completion) + '\n' : render(completion) + '\n';
+  const payload = json ? JSON.stringify(publicCompletion(completion)) + '\n' : render(completion) + '\n';
   const stdout = payload;
   const stderr = receipt(completion);
   return { stdout, stderr, exitCode };
@@ -24,9 +24,15 @@ export function completionCode(completion: Completion): 0 | 1 | 2 | 3 {
 }
 
 function render(completion: Completion): string {
-  if (isAnswer(completion)) return nodes(completion.data);
+  if (isAnswer(completion)) return `${completion.context ? `${completion.context.endsWith('\n') ? completion.context : `${completion.context}\n`}` : ''}${nodes(completion.data)}`;
   if (completion.category === 'invocation') return renderInvocationError(completion);
   return renderToolError(completion);
+}
+
+function publicCompletion(completion: Completion): Completion {
+  if (!isAnswer(completion)) return completion;
+  const { displayedFiles: _, context: __, contextError: ___, ...answer } = completion;
+  return answer;
 }
 
 function nodes(data: Answer['data']): string { return (Array.isArray(data) ? data : [data]).map(renderNode).join('\n'); }
@@ -54,7 +60,8 @@ function receipt(completion: Completion): string {
   if (isAnswer(completion)) {
     const answer = completion as Answer & { startupMs?: number };
     const base = answer.receipt ?? `${answer.count} answer${answer.count === 1 ? '' : 's'}, 0 ms`;
-    return answer.startupMs === undefined ? base : `${base} (server started, ${answer.startupMs} ms)`;
+    const receipt = answer.startupMs === undefined ? base : `${base} (server started, ${answer.startupMs} ms)`;
+    return answer.contextError ? `${answer.contextError}\n${receipt}` : receipt;
   }
   return completion.category === 'invocation' ? `invocation rejected, 0 ms` : `tool failed, 0 ms`;
 }

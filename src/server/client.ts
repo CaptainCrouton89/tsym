@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync } from 'node:fs';
+import { attachReadContext } from '../context-exposure.js';
 import { connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import type { Completion, Invocation, ToolError } from '../commands/types.js';
@@ -16,7 +17,7 @@ class DeadlineExpired extends Error {
 
 export async function invokeResident(invocation: Invocation): Promise<Completion> {
   const root = discoverRoot(invocation.root);
-  return send(root, 'invoke', invocation, true);
+  return attachReadContext(invocation, await send(root, 'invoke', invocation, true));
 }
 
 export async function serverStatus(rootOverride?: string): Promise<Completion> {
