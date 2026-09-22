@@ -271,7 +271,7 @@ async function main(): Promise<void> {
       // buildIndex is synchronous, so no watch callback can run until index is assigned below.
       watcher = watchIndex(root, configured, refresh, (error) => append(paths, `index refresh failure: ${safe(error)}`), (flush) => index?.markStale(flush));
       const metadata = readMetadata(store.path);
-      let built: ReturnType<typeof buildIndex>;
+      let built: ReturnType<typeof buildIndex> | undefined;
       await Promise.race([
         (async () => {
           if (!forceRebuild && metadata !== null) {
@@ -295,6 +295,7 @@ async function main(): Promise<void> {
         semantic!.index = snapshot;
         publishState(paths, publishedState(snapshot));
       });
+      built = undefined;
       semantic!.store = store;
       sendStartupPhase('index-build-end', indexBuildRemaining);
       bootstrapped = true;

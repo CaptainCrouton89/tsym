@@ -85,7 +85,7 @@ async function ensure(root: string, force = false, rebuild = false): Promise<Com
   const startedAt = performance.now();
   ensureStateDirectory(paths);
   const log = openSync(paths.log, 'a', 0o600);
-  try { spawn(process.execPath, [fileURLToPath(new URL('../../dist/server/main.js', import.meta.url)), '--root', root, ...(rebuild ? ['--rebuild'] : [])], { detached: true, stdio: ['ignore', log, log] }).unref(); }
+  try { spawn(process.execPath, ['--max-old-space-size=3072', fileURLToPath(new URL('../../dist/server/main.js', import.meta.url)), '--root', root, ...(rebuild ? ['--rebuild'] : [])], { detached: true, stdio: ['ignore', log, log] }).unref(); }
   finally { closeSync(log); }
   const deadline = startedAt + 30_000;
   while (performance.now() < deadline) {
