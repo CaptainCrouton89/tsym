@@ -54,5 +54,11 @@ export function removeEndpoint(paths: ServerPaths): void {
 export function idleSeconds(): number {
   const configured = process.env.TSYM_IDLE_SECONDS;
   if (configured !== undefined && /^\d+$/.test(configured)) return Number(configured);
-  return 14_400;
+  return 1_200;
+}
+
+export function maxResidents(): number {
+  const configured = process.env.TSYM_MAX_RESIDENTS;
+  const parsed = configured !== undefined && /^[1-9]\d*$/.test(configured) ? Number(configured) : undefined;
+  return parsed !== undefined && Number.isSafeInteger(parsed) ? parsed : 3;
 }

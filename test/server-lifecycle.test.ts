@@ -1,12 +1,32 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, watch, writeFileSync } from 'node:fs';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { idleSeconds, maxResidents } from '../src/server/lifecycle.js';
 
 const fixture = path.resolve('test/fixture');
+
+test('resident lifecycle defaults to twenty idle minutes and three live residents', () => {
+  const previousIdle = process.env.TSYM_IDLE_SECONDS;
+  const previousCap = process.env.TSYM_MAX_RESIDENTS;
+  try {
+    delete process.env.TSYM_IDLE_SECONDS;
+    delete process.env.TSYM_MAX_RESIDENTS;
+    assert.equal(idleSeconds(), 1_200);
+    assert.equal(maxResidents(), 3);
+    process.env.TSYM_MAX_RESIDENTS = '0';
+    assert.equal(maxResidents(), 3);
+    process.env.TSYM_MAX_RESIDENTS = '2';
+    assert.equal(maxResidents(), 2);
+  } finally {
+    if (previousIdle === undefined) delete process.env.TSYM_IDLE_SECONDS; else process.env.TSYM_IDLE_SECONDS = previousIdle;
+    if (previousCap === undefined) delete process.env.TSYM_MAX_RESIDENTS; else process.env.TSYM_MAX_RESIDENTS = previousCap;
+  }
+});
 
 function run(cache: string, ...args: string[]) {
   return runAt(fixture, cache, args);
@@ -210,6 +230,62 @@ test('a branch switch refreshes files instead of cold-building and ignores commi
   }
 });
 
+test('starting a fourth resident evicts the least recently queried resident', () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), 'tsym-resident-cap-'));
+  const roots = ['first', 'second', 'third', 'fourth'].map((name) => path.join(temporary, name));
+  const scratch = path.join(process.env.HOME ?? tmpdir(), '.crouter', 'canvas', 'scratch');
+  mkdirSync(scratch, { recursive: true });
+  const cache = mkdtempSync(path.join(scratch, 'tsym-resident-cap-'));
+  try {
+    for (const root of roots) cpSync(fixture, root, { recursive: true });
+    for (const root of roots.slice(0, 3)) assert.equal(runAt(root, cache, ['outline'], { TSYM_MAX_RESIDENTS: '3' }).status, 0);
+    assert.equal(runAt(roots[0]!, cache, ['outline'], { TSYM_MAX_RESIDENTS: '3' }).status, 0, 'the first resident becomes most recently queried');
+    const fourth = runAt(roots[3]!, cache, ['outline'], { TSYM_MAX_RESIDENTS: '3' });
+    assert.equal(fourth.status, 0, fourth.stderr);
+    assert.match(runAt(roots[0]!, cache, ['server', 'status'], { TSYM_MAX_RESIDENTS: '3' }).stdout, /state="ready"/);
+    assert.match(runAt(roots[1]!, cache, ['server', 'status'], { TSYM_MAX_RESIDENTS: '3' }).stdout, /state="stopped"/);
+    assert.match(runAt(roots[2]!, cache, ['server', 'status'], { TSYM_MAX_RESIDENTS: '3' }).stdout, /state="ready"/);
+    const status = runAt(roots[3]!, cache, ['server', 'status'], { TSYM_MAX_RESIDENTS: '3' });
+    assert.match(status.stdout, /state="ready"/);
+    assert.match(status.stdout, /maxResidents="3"/);
+  } finally {
+    for (const root of roots) runAt(root, cache, ['server', 'stop'], { TSYM_MAX_RESIDENTS: '3' });
+    rmSync(cache, { recursive: true, force: true });
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('a cap eviction lets the active request complete before stopping its resident', async () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), 'tsym-resident-busy-'));
+  const source = path.join(temporary, 'source');
+  const destination = path.join(temporary, 'destination');
+  const scratch = path.join(process.env.HOME ?? tmpdir(), '.crouter', 'canvas', 'scratch');
+  mkdirSync(scratch, { recursive: true });
+  const cache = mkdtempSync(path.join(scratch, 'tsym-resident-busy-cache-'));
+  let resident: ReturnType<typeof spawn> | undefined;
+  try {
+    cpSync(fixture, source, { recursive: true });
+    cpSync(fixture, destination, { recursive: true });
+    const port = path.join(cache, 'tsym', createHash('sha256').update(realpathSync(source)).digest('hex').slice(0, 16), 'port');
+    resident = spawn(process.execPath, ['dist/server/main.js', '--root', source], { cwd: process.cwd(), detached: true, stdio: 'ignore', env: { ...process.env, XDG_CACHE_HOME: cache, TSYM_MAX_RESIDENTS: '1' } });
+    resident.unref();
+    await endpointCreated(port);
+    const invocation = invokeUntilProjectLoad(port, realpathSync(source));
+    await invocation.started;
+    const started = runAt(destination, cache, ['outline'], { TSYM_MAX_RESIDENTS: '1' });
+    assert.equal(started.status, 0, started.stderr);
+    const completion = await invocation.completed;
+    assert.ok('answer' in completion && completion.answer, 'the active request must answer before its resident stops');
+    assert.match(runAt(source, cache, ['server', 'status'], { TSYM_MAX_RESIDENTS: '1' }).stdout, /state="stopped"/);
+  } finally {
+    runAt(source, cache, ['server', 'stop'], { TSYM_MAX_RESIDENTS: '1' });
+    runAt(destination, cache, ['server', 'stop'], { TSYM_MAX_RESIDENTS: '1' });
+    resident?.kill('SIGTERM');
+    rmSync(cache, { recursive: true, force: true });
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test('resident status, lazy start, and stop use a private cache', async () => {
   const cache = mkdtempSync(path.join(tmpdir(), 'tsym-test-'));
   try {
@@ -247,6 +323,38 @@ test('resident status, lazy start, and stop use a private cache', async () => {
     rmSync(cache, { recursive: true, force: true });
   }
 });
+
+function invokeUntilProjectLoad(port: string, root: string): { started: Promise<void>; completed: Promise<{ answer?: unknown; error?: unknown }> } {
+  const socket = connect(port);
+  let buffered = '';
+  let start = () => {};
+  let finish = (_completion: { answer?: unknown; error?: unknown }) => {};
+  const started = new Promise<void>((resolve) => { start = resolve; });
+  const completed = new Promise<{ answer?: unknown; error?: unknown }>((resolve, reject) => {
+    finish = resolve;
+    socket.on('error', reject);
+  });
+  socket.on('connect', () => socket.write(`${JSON.stringify({ version: 1, requestId: 'busy-request', root, operation: 'invoke', invocation: { path: ['outline'], cwd: root, args: [], flags: { '--depth': 1 }, explicit: [] } })}\n`));
+  socket.on('data', (chunk) => {
+    buffered += chunk.toString();
+    const lines = buffered.split('\n');
+    buffered = lines.pop()!;
+    for (const line of lines) {
+      const frame = JSON.parse(line) as { type: string; phase?: string; completion?: { answer?: unknown; error?: unknown } };
+      if (frame.type === 'phase' && frame.phase === 'project-load-start') start();
+      if (frame.type === 'response' && frame.completion) { finish(frame.completion); socket.end(); }
+    }
+  });
+  return { started, completed };
+}
+
+async function endpointCreated(port: string, timeout = 20_000): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (!existsSync(port)) {
+    if (Date.now() >= deadline) throw new Error('resident did not create its endpoint');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
 
 function git(root: string, args: string[]): string {
   const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });

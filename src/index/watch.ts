@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { existsSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { discoverDirectories, isProgramFileCandidate, skippedDirectories, type ConfiguredProjects } from '../ts7/projects.js';
 
@@ -48,7 +48,8 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
     const relative = path.relative(root, file);
     if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || relative.split(path.sep).some((part) => skippedDirectories.has(part))) return;
     // fs.watch reports renames for a directory move and does not enumerate every moved child.
-    if (isDirectory(file) || knownDirectories.has(file) || [...knownFiles].some((known) => known.startsWith(`${file}${path.sep}`))) { invalidate(); return; }
+    // A new directory is ignored until a program file inside it arrives as its own event.
+    if (knownDirectories.has(file) || [...knownFiles].some((known) => known.startsWith(`${file}${path.sep}`))) { invalidate(); return; }
     const known = knownFiles.has(file);
     if (!known && !isProgramFileCandidate(file)) return;
     const configuration = path.basename(file) === 'tsconfig.json' || path.basename(file) === 'package.json';
@@ -114,11 +115,6 @@ export function watchIndex(root: string, projects: ConfiguredProjects, refresh: 
     },
     refresh: resetDirectories,
   };
-}
-
-function isDirectory(file: string): boolean {
-  try { return statSync(file).isDirectory(); }
-  catch { return false; }
 }
 
 function watchGit(root: string, changed: () => void): { close(): void } {

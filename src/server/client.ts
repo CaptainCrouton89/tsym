@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, openSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readdirSync, rmSync } from 'node:fs';
 import { attachReadContext } from '../context-exposure.js';
 import { connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import type { Completion, Invocation, ToolError } from '../commands/types.js';
-import { discoverRoot, ensureStateDirectory, pathsForRoot, type ServerPaths } from './lifecycle.js';
+import { discoverRoot, ensureStateDirectory, maxResidents, pathsForRoot, readState, type PublishedState, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, request, type PhaseFrame, type ResponseFrame, type WireFrame, writeFrame } from './wire.js';
 
 type DeadlinePhase = 'queued' | 'project-load' | 'index-build' | 'running';
@@ -80,6 +81,7 @@ async function ensure(root: string, force = false, rebuild = false): Promise<Com
   if (!force && existsSync(paths.port)) {
     try { return await exchange(paths, request(root, 'status')); } catch { /* a lock holder will clean stale endpoint */ }
   }
+  await makeResidentSlot(paths);
   const startedAt = performance.now();
   ensureStateDirectory(paths);
   const log = openSync(paths.log, 'a', 0o600);
@@ -93,6 +95,45 @@ async function ensure(root: string, force = false, rebuild = false): Promise<Com
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   return unavailable(paths, 'No resident became ready within 30 seconds.');
+}
+
+interface Resident {
+  state: PublishedState;
+}
+
+async function makeResidentSlot(paths: ServerPaths): Promise<void> {
+  const cap = maxResidents();
+  let residents = liveResidents(paths);
+  while (residents.length >= cap) {
+    const candidate = residents.sort((left, right) => Date.parse(left.state.idleDeadline) - Date.parse(right.state.idleDeadline))[0]!;
+    const stopped = await serverStop(candidate.state.root);
+    if ('category' in stopped) throw new Error(`Could not stop resident ${candidate.state.root}: ${stopped.code}`);
+    residents = liveResidents(paths);
+  }
+}
+
+function liveResidents(paths: ServerPaths): Resident[] {
+  const base = path.dirname(paths.state);
+  try {
+    return readdirSync(base, { withFileTypes: true }).flatMap((entry) => {
+      if (!entry.isDirectory()) return [];
+      const residentPaths = { ...paths, state: path.join(base, entry.name), pid: path.join(base, entry.name, 'pid') };
+      const state = readState(residentPaths);
+      if (!state) return [];
+      if (processExists(state.pid)) return [{ state }];
+      rmSync(residentPaths.pid, { force: true });
+      return [];
+    });
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+function processExists(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (error: unknown) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
 }
 
 function exchange(paths: ServerPaths, payload: ReturnType<typeof request>): Promise<Completion> {

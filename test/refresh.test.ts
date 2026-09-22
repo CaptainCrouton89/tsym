@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -179,15 +179,14 @@ test('a reader waits for the watcher batch that arrived while the previous rebui
   assert.deepEqual(states, ['current', 'stale', 'indexing', 'stale', 'indexing', 'stale', 'indexing', 'current']);
 });
 
-test('a file created under a previously empty directory reaches the refresh batch', async () => {
+test('a new empty directory is ignored and a program file inside it refreshes', async () => {
   const { root, cleanup } = fixture();
   const program = new Ts7Host(root);
   const projects = new ConfiguredProjects(root, program);
   const previous = process.env.TSYM_DEBOUNCE_MS;
   process.env.TSYM_DEBOUNCE_MS = '20';
-  // The directory exists and holds no source file, so no watched file's dirname names it.
-  mkdirSync(path.join(root, 'src', 'empty'), { recursive: true });
-  const fresh = path.join(root, 'src', 'empty', 'fresh.ts');
+  const empty = path.join(root, 'src', 'empty');
+  const fresh = path.join(empty, 'fresh.ts');
   const batches: WatchBatch[] = [];
   let seen = () => {};
   const arrived = new Promise<void>((resolve) => { seen = resolve; });
@@ -196,9 +195,36 @@ test('a file created under a previously empty directory reaches the refresh batc
     projects.load();
     const watcher = watchIndex(root, projects, async (batch) => { batches.push(batch); if (covered()) seen(); }, (error) => { throw error; }, () => {});
     try {
+      mkdirSync(empty);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.deepEqual(batches, [], 'an empty directory must not refresh the index');
       writeFileSync(fresh, 'export const fresh = true;\n');
       await Promise.race([arrived, new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`batches: ${JSON.stringify(batches)}`)), 5_000).unref())]);
     } finally { watcher.close(); }
+  } finally {
+    if (previous === undefined) delete process.env.TSYM_DEBOUNCE_MS; else process.env.TSYM_DEBOUNCE_MS = previous;
+    program.close();
+    cleanup();
+  }
+});
+
+test('renaming a directory with indexed files invalidates the index', async () => {
+  const { root, cleanup } = fixture();
+  const program = new Ts7Host(root);
+  const projects = new ConfiguredProjects(root, program);
+  const previous = process.env.TSYM_DEBOUNCE_MS;
+  process.env.TSYM_DEBOUNCE_MS = '20';
+  const batches: WatchBatch[] = [];
+  let seen = () => {};
+  const arrived = new Promise<void>((resolve) => { seen = resolve; });
+  try {
+    projects.load();
+    const watcher = watchIndex(root, projects, async (batch) => { batches.push(batch); if ('invalidateAll' in batch.fileChanges) seen(); }, (error) => { throw error; }, () => {});
+    try {
+      renameSync(path.join(root, 'src', 'api'), path.join(root, 'src', 'moved'));
+      await Promise.race([arrived, new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`batches: ${JSON.stringify(batches)}`)), 5_000).unref())]);
+    } finally { watcher.close(); }
+    assert.ok(batches.some((batch) => 'invalidateAll' in batch.fileChanges && batch.full));
   } finally {
     if (previous === undefined) delete process.env.TSYM_DEBOUNCE_MS; else process.env.TSYM_DEBOUNCE_MS = previous;
     program.close();

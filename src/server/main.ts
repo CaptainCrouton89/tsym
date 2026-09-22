@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createServer, type Socket } from 'node:net';
 import { appendFileSync, chmodSync, existsSync, openSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { discoverRoot, ensureStateDirectory, idleSeconds, pathsForRoot, publishState, removeEndpoint, type ServerPaths } from './lifecycle.js';
+import { discoverRoot, ensureStateDirectory, idleSeconds, maxResidents, pathsForRoot, publishState, removeEndpoint, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, WIRE_VERSION, type WireFrame, type WireRequest, writeFrame } from './wire.js';
 import { createSemanticContext } from './context.js';
 import { bundledTypeScriptVersion, Ts7ServerDiedError, TypeScriptBinaryError } from '../ts7/api.js';
@@ -66,6 +66,7 @@ async function main(): Promise<void> {
   let activeDeadlineAt: number | undefined;
   let activeTimer: NodeJS.Timeout | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
+  let idleDeadline = new Date(Date.now() + idleSeconds() * 1000).toISOString();
   let listenerClosing = false;
   const sockets = new Set<Socket>();
   const invokeSockets = new Map<Socket, string>();
@@ -80,7 +81,7 @@ async function main(): Promise<void> {
     bootedAt: bootedAt.toISOString(),
     port: paths.port,
     log: paths.log,
-    idleDeadline: new Date(Date.now() + idleSeconds() * 1000).toISOString(),
+    idleDeadline,
     state: stopping ? 'stopping' as const : 'ready' as const,
     index: snapshot === undefined ? undefined : snapshot.state === 'current' ? 'current' as const : 'stale' as const,
     declarations: snapshot?.built.receipt.declarations,
@@ -102,11 +103,13 @@ async function main(): Promise<void> {
   });
 
   const touch = () => {
+    idleDeadline = new Date(Date.now() + idleSeconds() * 1000).toISOString();
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       if (!active && queue.length === 0) retire();
     }, idleSeconds() * 1000);
     idleTimer.unref();
+    publishState(paths, publishedState());
   };
 
   const remaining = (deadlineAt: number | undefined) => Math.max(0, Math.ceil((deadlineAt ?? performance.now()) - performance.now()));
@@ -439,7 +442,7 @@ async function main(): Promise<void> {
       const snapshot = index?.current();
       const receipt = snapshot?.built.receipt;
       const indexedCommit = readMetadata(paths.store)?.indexedCommit;
-      respond(socket, request.requestId, { data: { element: 'server', attributes: { root, state, pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s`, uptime: `${Math.floor(performance.now() - bootedAtMonotonic)}ms`, memory, typescript: semantic ? bundledTypeScriptVersion() : undefined, store: paths.store, seededFrom, indexedCommit, declarations: receipt?.declarations, edges: receipt ? Object.values(receipt.relationships).reduce((total, count) => total + count, 0) : undefined, notInProgram: semantic ? unconfiguredFileCount(root, semantic.projects.records()) : undefined, index: snapshot?.state, indexDuration: receipt ? `${Math.round(receipt.durationMs)}ms` : undefined } }, count: 1 });
+      respond(socket, request.requestId, { data: { element: 'server', attributes: { root, state, pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s`, maxResidents: maxResidents(), uptime: `${Math.floor(performance.now() - bootedAtMonotonic)}ms`, memory, typescript: semantic ? bundledTypeScriptVersion() : undefined, store: paths.store, seededFrom, indexedCommit, declarations: receipt?.declarations, edges: receipt ? Object.values(receipt.relationships).reduce((total, count) => total + count, 0) : undefined, notInProgram: semantic ? unconfiguredFileCount(root, semantic.projects.records()) : undefined, index: snapshot?.state, indexDuration: receipt ? `${Math.round(receipt.durationMs)}ms` : undefined } }, count: 1 });
       return;
     }
     if (request.operation === 'stop') {
