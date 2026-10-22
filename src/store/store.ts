@@ -19,13 +19,15 @@ export class EngineBinaryError extends Error {
   }
 }
 
-/** The store at `storePath` was corrupt, was moved to `preserved`, and the fresh store could not be opened or built. */
+/** The store at `storePath` was corrupt and could not be replaced. `preserved` is where the corrupt copy was moved; it is undefined when the move itself failed and the corrupt store is still at `storePath`. */
 export class StoreRecoveryError extends Error {
   readonly reason: string;
 
-  constructor(readonly storePath: string, readonly preserved: string, cause: unknown) {
+  constructor(readonly storePath: string, readonly preserved: string | undefined, cause: unknown) {
     const reason = cause instanceof Error ? cause.message : String(cause);
-    super(`The tsym store at ${storePath} was corrupt (preserved at ${preserved}) and its replacement failed: ${reason}`);
+    super(preserved === undefined
+      ? `The tsym store at ${storePath} was corrupt and could not be moved aside: ${reason}`
+      : `The tsym store at ${storePath} was corrupt (preserved at ${preserved}) and its replacement failed: ${reason}`);
     this.reason = reason;
     this.name = 'StoreRecoveryError';
   }
@@ -74,7 +76,7 @@ export function openStore(storePath: string, log: (message: string) => void): { 
     const preserved = `${path.resolve(storePath)}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     log(`store open failed with WAL corruption: ${error instanceof Error ? error.message : String(error)}`);
     try { renameSync(storePath, preserved); }
-    catch (renameError) { throw new StoreRecoveryError(storePath, preserved, renameError); }
+    catch (renameError) { throw new StoreRecoveryError(storePath, undefined, renameError); }
     log(`corrupt store preserved at ${preserved}`);
     try { return { store: new Store(storePath), recovered: { preserved } }; }
     catch (reopenError) { throw new StoreRecoveryError(storePath, preserved, reopenError); }

@@ -117,9 +117,13 @@ async function main(): Promise<void> {
     if (!socket.destroyed) send(socket, { type: 'phase', requestId, phase, remainingMs, command });
   };
   const toolError = (code: string, message: string, next: string): ToolError => ({ category: 'tool', code, message, logPath: paths.log, next });
-  const loadFailure = (error: unknown): ToolError => error instanceof StoreRecoveryError
-    ? (append(paths, `store recovery failed: ${error.message}`), toolError('store-recovery-failed', `The tsym index store at ${error.storePath} was corrupt and could not be rebuilt.`, `${error.reason} The corrupt store is kept at ${error.preserved}; read the log, then retry.`))
-    : toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.');
+  const loadFailure = (error: unknown): ToolError => {
+    if (!(error instanceof StoreRecoveryError)) return toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.');
+    append(paths, `store recovery failed: ${error.message}`);
+    return error.preserved === undefined
+      ? toolError('store-recovery-failed', `The tsym index store at ${error.storePath} is corrupt and could not be moved aside.`, `${error.reason} The corrupt store is still at ${error.storePath}; fix the cause, or remove that directory, then retry.`)
+      : toolError('store-recovery-failed', `The tsym index store at ${error.storePath} was corrupt and could not be rebuilt.`, `${error.reason} The corrupt store is kept at ${error.preserved}; read the log, then retry.`);
+  };
   const respond = (socket: Socket, requestId: string, completion: Completion) => {
     if (!socket.destroyed) send(socket, { type: 'response', requestId, completion: 'category' in completion ? { error: completion } : { answer: completion } });
   };
