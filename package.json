@@ -43,5 +43,13 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CaptainCrouton89/tsym.git"
+  },
+  "homepage": "https://github.com/CaptainCrouton89/tsym#readme",
+  "bugs": {
+    "url": "https://github.com/CaptainCrouton89/tsym/issues"
   }
 }
