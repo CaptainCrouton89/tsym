@@ -36,7 +36,7 @@
   },
   "dependencies": {
     "@ast-grep/napi": "^0.45.3",
-    "@ladybugdb/core": "0.20.4",
+    "@ladybugdb/core": "0.21.2",
     "ts5": "npm:typescript@5.9.3",
     "typescript": "7.0.2"
   },

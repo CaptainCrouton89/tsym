@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { Connection, Database } from '@ladybugdb/core';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,7 +11,7 @@ import { loadGraph, readGraph, replaceFile, replaceFiles, type DeclarationRow, t
 import { discardIncompatibleStore, formatIdentity, readMetadata, writeMetadata } from '../src/store/meta.js';
 import { query } from '../src/store/query.js';
 import { STORE_SCHEMA_VERSION } from '../src/store/schema.js';
-import { Store } from '../src/store/store.js';
+import { openStore, Store } from '../src/store/store.js';
 import { ensureStateDirectory, pathsForRoot } from '../src/server/lifecycle.js';
 import { refuseSeed } from '../src/store/seed.js';
 
@@ -52,15 +52,36 @@ test('a store from another schema version is discarded whole; the current versio
     mkdirSync(storePath, { recursive: true });
     assert.equal(discardIncompatibleStore(storePath, identity), true, 'a store without metadata is unreadable');
     mkdirSync(storePath, { recursive: true });
-    writeMetadata(storePath, { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7', tsymBuild: identity.tsymBuild, root, indexedCommit: '', configSet: [], configHashes: {}, packageHash: '', lockfileHash: '', indexDurationMs: 0, files: {} });
+    writeMetadata(storePath, { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7', engineVersion: identity.engineVersion, tsymBuild: identity.tsymBuild, root, indexedCommit: '', configSet: [], configHashes: {}, packageHash: '', lockfileHash: '', indexDurationMs: 0, files: {} });
     assert.equal(discardIncompatibleStore(storePath, identity), false);
     assert.ok(readMetadata(storePath));
+    assert.equal(discardIncompatibleStore(storePath, { ...identity, engineVersion: '0.0.0' }), true, 'a graph written by another engine version is rebuilt');
+    mkdirSync(storePath, { recursive: true });
+    writeMetadata(storePath, { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7', engineVersion: identity.engineVersion, tsymBuild: identity.tsymBuild, root, indexedCommit: '', configSet: [], configHashes: {}, packageHash: '', lockfileHash: '', indexDurationMs: 0, files: {} });
     const stale = { ...readMetadata(storePath)!, schemaVersion: STORE_SCHEMA_VERSION - 1 };
     rmSync(storePath, { recursive: true, force: true });
     mkdirSync(storePath, { recursive: true });
     writeFileSync(path.join(storePath, 'meta.json'), JSON.stringify(stale));
     assert.equal(discardIncompatibleStore(storePath, identity), true);
     assert.equal(readMetadata(storePath), null);
+  } finally { remove(root); }
+});
+
+test('a store whose WAL is corrupt is moved aside once and replaced by an empty store', () => {
+  const { root, path: storePath } = temporaryStore();
+  try {
+    new Store(storePath).close();
+    writeFileSync(path.join(storePath, 'graph.lbug.wal'), Buffer.alloc(200, 0xab));
+    assert.throws(() => new Store(storePath), /WAL file is corrupted/);
+    const log: string[] = [];
+    const opened = openStore(storePath, (message) => log.push(message));
+    try {
+      assert.ok(opened.recovered);
+      assert.match(path.basename(opened.recovered.preserved), /^store\.corrupt-/);
+      assert.ok(readdirSync(opened.recovered.preserved).includes('graph.lbug.wal'));
+      assert.equal(log.length, 2);
+      assert.deepEqual(opened.store.execute('MATCH (d:Declaration) RETURN count(d) AS n'), [{ n: 0 }]);
+    } finally { opened.store.close(); }
   } finally { remove(root); }
 });
 
@@ -334,7 +355,7 @@ test('refuses a second process before Ladybug opens the store', () => {
 test('metadata and state directories preserve every shape input', () => {
   const temp = temporaryStore();
   try {
-    const metadata = { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7.0.2', tsymBuild: 'build', root: temp.root, indexedCommit: 'abc', configSet: ['tsconfig.json'], configHashes: { 'tsconfig.json': 'config' }, packageHash: 'package', lockfileHash: 'lock', indexDurationMs: 0, files: { 'src/file.ts': 'hash' } };
+    const metadata = { schemaVersion: STORE_SCHEMA_VERSION, tsVersion: '7.0.2', engineVersion: '0.21.2', tsymBuild: 'build', root: temp.root, indexedCommit: 'abc', configSet: ['tsconfig.json'], configHashes: { 'tsconfig.json': 'config' }, packageHash: 'package', lockfileHash: 'lock', indexDurationMs: 0, files: { 'src/file.ts': 'hash' } };
     writeMetadata(temp.path, metadata);
     assert.deepEqual(readMetadata(temp.path), metadata);
     const paths = pathsForRoot(temp.root);

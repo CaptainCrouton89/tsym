@@ -1,5 +1,5 @@
 import type { Connection, Database, LbugValue, QueryResult } from '@ladybugdb/core';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { NODE_TABLES, RELATION_TABLES, SCHEMA_STATEMENTS } from './schema.js';
@@ -16,6 +16,18 @@ export class EngineBinaryError extends Error {
   constructor(platform = `${process.platform}-${process.arch}`) {
     super(`LadybugDB has no prebuilt binary for ${platform}, and tsym does not compile it.\nPrebuilt platforms: ${ENGINE_PLATFORMS.join(', ')}.`);
     this.platform = platform;
+  }
+}
+
+/** The store at `storePath` was corrupt, was moved to `preserved`, and the fresh store could not be opened or built. */
+export class StoreRecoveryError extends Error {
+  readonly reason: string;
+
+  constructor(readonly storePath: string, readonly preserved: string, cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(`The tsym store at ${storePath} was corrupt (preserved at ${preserved}) and its replacement failed: ${reason}`);
+    this.reason = reason;
+    this.name = 'StoreRecoveryError';
   }
 }
 
@@ -38,6 +50,36 @@ export class StoreReadOnlyError extends Error {
 }
 
 export type StoreRow = Record<string, LbugValue>;
+
+// LadybugDB's WAL replay and checksum failures. Ownership, permission, disk-full, engine-binary and project errors never match.
+const WAL_CORRUPTION = /Corrupted wal file|WAL replay encountered|Checksum verification failed, the WAL file is corrupted/i;
+
+export function isWalCorruption(error: unknown): boolean {
+  return error instanceof Error && WAL_CORRUPTION.test(error.message);
+}
+
+/** The loaded engine's version; part of the store format identity because a graph written by one engine is not reopened by another. */
+export function engineVersion(): string {
+  return loadEngine().Database.getVersion();
+}
+
+/**
+ * Opens the store. A WAL-corruption failure moves the whole store directory aside and opens a fresh one, once.
+ * `recovered` names the preserved directory when that happened; the caller must then rebuild the index from nothing.
+ */
+export function openStore(storePath: string, log: (message: string) => void): { store: Store; recovered?: { preserved: string } } {
+  try { return { store: new Store(storePath) }; }
+  catch (error) {
+    if (!isWalCorruption(error)) throw error;
+    const preserved = `${path.resolve(storePath)}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    log(`store open failed with WAL corruption: ${error instanceof Error ? error.message : String(error)}`);
+    try { renameSync(storePath, preserved); }
+    catch (renameError) { throw new StoreRecoveryError(storePath, preserved, renameError); }
+    log(`corrupt store preserved at ${preserved}`);
+    try { return { store: new Store(storePath), recovered: { preserved } }; }
+    catch (reopenError) { throw new StoreRecoveryError(storePath, preserved, reopenError); }
+  }
+}
 
 export class Store {
   readonly path: string;
@@ -139,12 +181,12 @@ export class Store {
   }
 }
 
-function loadEngine(): { Database: new (file: string) => Database; Connection: new (database: Database) => Connection } {
+function loadEngine(): { Database: (new (file: string) => Database) & { getVersion(): string }; Connection: new (database: Database) => Connection } {
   let entry: string;
   try { entry = require.resolve('@ladybugdb/core'); }
   catch { throw new EngineBinaryError(); }
   if (!existsSync(path.join(path.dirname(entry), 'lbugjs.node'))) throw new EngineBinaryError();
-  return require('@ladybugdb/core') as { Database: new (file: string) => Database; Connection: new (database: Database) => Connection };
+  return require('@ladybugdb/core') as { Database: (new (file: string) => Database) & { getVersion(): string }; Connection: new (database: Database) => Connection };
 }
 
 function tableName(statement: string): string {

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ts from 'ts5';
 import { STORE_SCHEMA_VERSION } from './schema.js';
+import { engineVersion } from './store.js';
 import type { ConfiguredProjects } from '../ts7/projects.js';
 
 export type IndexedFileMeta = string;
@@ -12,6 +13,7 @@ export type IndexedFileMeta = string;
 export interface StoreMetadata {
   schemaVersion: number;
   tsVersion: string;
+  engineVersion: string;
   tsymBuild: string;
   root: string;
   indexedCommit: string;
@@ -59,10 +61,10 @@ export function writeMetadata(storePath: string, metadata: StoreMetadata): void 
 }
 
 /** Captures every input whose change can alter the configured-program graph. */
-export interface StoreFormatIdentity { schemaVersion: number; tsVersion: string; tsymBuild: string; }
+export interface StoreFormatIdentity { schemaVersion: number; tsVersion: string; engineVersion: string; tsymBuild: string; }
 
 export function formatIdentity(tsVersion = bundledTsVersion()): StoreFormatIdentity {
-  return { schemaVersion: STORE_SCHEMA_VERSION, tsVersion, tsymBuild: hashTsymBuild() };
+  return { schemaVersion: STORE_SCHEMA_VERSION, tsVersion, engineVersion: engineVersion(), tsymBuild: hashTsymBuild() };
 }
 
 export function metadataFor(root: string, projects: ConfiguredProjects, indexedCommit: string, indexDurationMs = 0, identity = formatIdentity()): StoreMetadata {
@@ -86,8 +88,8 @@ export function hasDrift(metadata: StoreMetadata, expected: StoreMetadata): bool
   return JSON.stringify(driftShape(metadata)) !== JSON.stringify(driftShape(expected));
 }
 
-export function sameFormat(metadata: Pick<StoreMetadata, 'schemaVersion' | 'tsVersion' | 'tsymBuild'>, identity: StoreFormatIdentity): boolean {
-  return metadata.schemaVersion === identity.schemaVersion && metadata.tsVersion === identity.tsVersion && metadata.tsymBuild === identity.tsymBuild;
+export function sameFormat(metadata: Pick<StoreMetadata, 'schemaVersion' | 'tsVersion' | 'engineVersion' | 'tsymBuild'>, identity: StoreFormatIdentity): boolean {
+  return metadata.schemaVersion === identity.schemaVersion && metadata.tsVersion === identity.tsVersion && metadata.engineVersion === identity.engineVersion && metadata.tsymBuild === identity.tsymBuild;
 }
 
 function driftShape(metadata: StoreMetadata): Omit<StoreMetadata, 'indexedCommit' | 'indexDurationMs'> {

@@ -14,7 +14,7 @@ import { IndexStateController } from '../index/state.js';
 import { watchIndex, type IndexWatcher, type WatchBatch } from '../index/watch.js';
 import { discardIncompatibleStore, formatIdentity, hasDrift, metadataFor, readMetadata, writeMetadata } from '../store/meta.js';
 import { copyStore, refuseSeed, seedFromSibling } from '../store/seed.js';
-import { EngineBinaryError, Store } from '../store/store.js';
+import { EngineBinaryError, openStore, Store, StoreRecoveryError } from '../store/store.js';
 import { executeSemantic } from '../commands/handlers.js';
 import { findNode } from '../commands/tree.js';
 import type { Completion, ToolError } from '../commands/types.js';
@@ -117,6 +117,9 @@ async function main(): Promise<void> {
     if (!socket.destroyed) send(socket, { type: 'phase', requestId, phase, remainingMs, command });
   };
   const toolError = (code: string, message: string, next: string): ToolError => ({ category: 'tool', code, message, logPath: paths.log, next });
+  const loadFailure = (error: unknown): ToolError => error instanceof StoreRecoveryError
+    ? (append(paths, `store recovery failed: ${error.message}`), toolError('store-recovery-failed', `The tsym index store at ${error.storePath} was corrupt and could not be rebuilt.`, `${error.reason} The corrupt store is kept at ${error.preserved}; read the log, then retry.`))
+    : toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.');
   const respond = (socket: Socket, requestId: string, completion: Completion) => {
     if (!socket.destroyed) send(socket, { type: 'response', requestId, completion: 'category' in completion ? { error: completion } : { answer: completion } });
   };
@@ -263,7 +266,10 @@ async function main(): Promise<void> {
       if (deadlineTimer) clearTimeout(deadlineTimer);
       deadlineTimer = undefined;
       loadDeadlineAt = undefined;
-      store = new Store(paths.store);
+      const opened = openStore(paths.store, (message) => append(paths, message));
+      store = opened.store;
+      // A recovered store is empty; bypass its (absent) metadata explicitly so nothing reuses or seeds around the rebuild.
+      const rebuild = forceRebuild || opened.recovered !== undefined;
       indexBuildDeadlineAt = performance.now() + 180_000;
       sendStartupPhase('index-build-start', 180_000);
       // The watcher starts before the build, not after it: buildIndex takes tens of seconds on a large workspace,
@@ -274,7 +280,7 @@ async function main(): Promise<void> {
       let built: ReturnType<typeof buildIndex> | undefined;
       await Promise.race([
         (async () => {
-          if (!forceRebuild && metadata !== null) {
+          if (!rebuild && metadata !== null) {
             const reused = reuseIndex(store!);
             if (hasDrift(metadata, expected)) {
               const refreshed = refreshIndex(root, program, configured, store!, reused, { fileChanges: { invalidateAll: true } }, identity);
@@ -282,7 +288,9 @@ async function main(): Promise<void> {
               built = refreshed.built;
             } else built = reused;
           } else {
-            built = buildIndex(root, program, configured, store!, identity);
+            try { built = buildIndex(root, program, configured, store!, identity); }
+            catch (error) { throw opened.recovered ? new StoreRecoveryError(paths.store, opened.recovered.preserved, error) : error; }
+            if (opened.recovered) append(paths, `store recovered: fresh index built, corrupt store kept at ${opened.recovered.preserved} duration=${Math.round(built.receipt.durationMs)}ms`);
           }
         })(),
         deadline('index-build', 180_000),
@@ -349,7 +357,7 @@ async function main(): Promise<void> {
         return;
       }
       if (!retired) {
-        if (!bootstrapped) respond(queued.socket, queued.request.requestId, toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.'));
+        if (!bootstrapped) respond(queued.socket, queued.request.requestId, loadFailure(error));
         else {
           append(paths, `command failed command=${currentCommand ?? 'unknown'}\n${error instanceof Error && error.stack ? error.stack : safe(error)}`);
           const failure = toolError('command-failed', safe(error), 'Read the resident log, then retry the command.');
@@ -426,7 +434,7 @@ async function main(): Promise<void> {
       catch (error) {
         if (error instanceof DeadlineExceeded) respond(socket, request.requestId, startupDeadlineFailure(error.phase));
         else if (error instanceof EngineBinaryError || error instanceof TypeScriptBinaryError) respond(socket, request.requestId, { category: 'tool', code: error.code, attributes: { platform: error.platform }, message: error.message });
-        else respond(socket, request.requestId, toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.'));
+        else respond(socket, request.requestId, loadFailure(error));
         finishSocket(socket);
         return;
       }
