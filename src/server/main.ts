@@ -118,7 +118,7 @@ async function main(): Promise<void> {
   };
   const toolError = (code: string, message: string, next: string): ToolError => ({ category: 'tool', code, message, logPath: paths.log, next });
   const loadFailure = (error: unknown): ToolError => {
-    if (!(error instanceof StoreRecoveryError)) return toolError('project-load-failed', 'TypeScript could not load the workspace project.', error instanceof Error ? error.message : 'Read the log and repair the project.');
+    if (!(error instanceof StoreRecoveryError)) return ({ ...toolError('project-load-failed', 'TypeScript could not load the workspace project.', 'Pass --root at a repository or package directory with a tsconfig.json, or read the log.'), received: error instanceof Error ? error.message : String(error) });
     append(paths, `store recovery failed: ${error.message}`);
     return error.preserved === undefined
       ? toolError('store-recovery-failed', `The tsym index store at ${error.storePath} is corrupt and could not be moved aside.`, `${error.reason} The corrupt store is still at ${error.storePath}; fix the cause, or remove that directory, then retry.`)
