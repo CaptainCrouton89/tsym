@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { attachReadContext } from '../context-exposure.js';
 import { connect } from 'node:net';
@@ -127,16 +127,25 @@ async function makeResidentSlot(paths: ServerPaths): Promise<void> {
 
 async function evict(state: PublishedState): Promise<boolean> {
   const victim = pathsForRoot(state.root);
+  // A graceful stop waits as long as the resident's own request deadlines allow, as serverStop did.
   if (existsSync(victim.port)) {
-    const stopped = exchange(victim, request(state.root, 'stop')).catch(() => undefined);
-    await Promise.race([stopped, delay(5_000)]);
+    await exchange(victim, request(state.root, 'stop')).catch(() => undefined);
     if (await exited(state.pid, 5_000)) return true;
   }
+  // Only a process that is verifiably this tsym resident may be signalled; a stale state file can name a reused pid.
+  if (!isResidentProcess(state)) { removeEndpoint(victim); return true; }
   for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
     try { process.kill(state.pid, signal); } catch { /* already gone */ }
     if (await exited(state.pid, 2_000)) { removeEndpoint(victim); return true; }
   }
   return false;
+}
+
+function isResidentProcess(state: PublishedState): boolean {
+  try {
+    const command = execFileSync('ps', ['-p', String(state.pid), '-o', 'command='], { encoding: 'utf8' });
+    return command.includes('server/main.js') && command.includes(state.root);
+  } catch { return false; }
 }
 
 async function exited(pid: number, withinMs: number): Promise<boolean> {
