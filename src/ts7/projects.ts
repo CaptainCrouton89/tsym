@@ -23,6 +23,7 @@ export class ConfiguredProjects {
   load(): readonly ConfiguredProject[] {
     if (this.loaded) return [...this.projects.values()];
     const configs = discoverConfigs(this.root);
+    assertRootNotTooBroad(this.root, configs);
     const projects = this.program.load(configs);
     for (const config of configs) {
       const project = projects.find((candidate) => path.resolve(candidate.configFileName) === config);
@@ -60,6 +61,14 @@ export class ConfiguredProjects {
   anySourceFile(file: string) { return this.program.sourceFile(undefined, path.resolve(file)); }
 
   records(): readonly ConfiguredProject[] { return [...this.projects.values()]; }
+}
+
+/** A root with no tsconfig.json of its own and this many nested ones is a directory of repositories, not one workspace. */
+export const maxNestedConfigs = 50;
+
+function assertRootNotTooBroad(root: string, configs: readonly string[]): void {
+  if (configs.length <= maxNestedConfigs || configs.includes(path.join(root, 'tsconfig.json'))) return;
+  throw new Error(`${root} has no tsconfig.json of its own but contains ${configs.length} nested ones (limit ${maxNestedConfigs}); indexing it would exhaust memory. Pass --root with the repository or package directory you mean.`);
 }
 
 /** Every non-skipped directory in the workspace, including the root. */

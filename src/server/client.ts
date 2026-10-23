@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, openSync, readdirSync, rmSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { attachReadContext } from '../context-exposure.js';
 import { connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import type { Completion, Invocation, ToolError } from '../commands/types.js';
-import { discoverRoot, ensureStateDirectory, maxResidents, pathsForRoot, readState, type PublishedState, type ServerPaths } from './lifecycle.js';
+import { discoverRoot, ensureStateDirectory, maxResidents, pathsForRoot, readState, removeEndpoint, type PublishedState, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, request, type PhaseFrame, type ResponseFrame, type WireFrame, writeFrame } from './wire.js';
 
 type DeadlinePhase = 'queued' | 'project-load' | 'index-build' | 'running';
@@ -85,32 +85,70 @@ async function ensure(root: string, force = false, rebuild = false): Promise<Com
   const startedAt = performance.now();
   ensureStateDirectory(paths);
   const log = openSync(paths.log, 'a', 0o600);
-  try { spawn(process.execPath, ['--max-old-space-size=3072', fileURLToPath(new URL('../../dist/server/main.js', import.meta.url)), '--root', root, ...(rebuild ? ['--rebuild'] : [])], { detached: true, stdio: ['ignore', log, log] }).unref(); }
-  finally { closeSync(log); }
+  let childExit: string | undefined;
+  try {
+    const child = spawn(process.execPath, ['--max-old-space-size=3072', fileURLToPath(new URL('../../dist/server/main.js', import.meta.url)), '--root', root, ...(rebuild ? ['--rebuild'] : [])], { detached: true, stdio: ['ignore', log, log] });
+    // Exit code 0 means this candidate lost the lock to another resident, which we keep waiting for; anything else means no resident is coming from this spawn.
+    child.once('exit', (code, signal) => { if (code !== 0) childExit = signal ? `killed by ${signal}` : `exited with code ${code}`; });
+    child.once('error', (error) => { childExit = `failed to start: ${error.message}`; });
+    child.unref();
+  } finally { closeSync(log); }
   const deadline = startedAt + 30_000;
   while (performance.now() < deadline) {
     if (existsSync(paths.port)) {
       try { return { ...await exchange(paths, request(root, 'status')), startupStartedAt: startedAt }; } catch { /* wait for the winning candidate */ }
     }
+    if (childExit !== undefined) return startupDied(paths, childExit);
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   return unavailable(paths, 'No resident became ready within 30 seconds.');
+}
+
+function startupDied(paths: ServerPaths, how: string): ToolError {
+  let tail = '';
+  try { tail = readFileSync(paths.log, 'utf8').trimEnd().split('\n').slice(-3).join(' | '); } catch { /* the log may not exist yet */ }
+  return { category: 'tool', code: 'server-died', message: `The resident process ${how} before it became ready.`, logPath: paths.log, received: tail || 'an empty log', next: 'Read the server log; if it reports out of memory, pass --root with a smaller repository or package directory.' };
 }
 
 interface Resident {
   state: PublishedState;
 }
 
+/** Frees a slot by stopping the least recently used resident of any root. Never fails the caller: a resident that will not stop is killed, and one that cannot be killed is left running over the cap. */
 async function makeResidentSlot(paths: ServerPaths): Promise<void> {
   const cap = maxResidents();
   let residents = liveResidents(paths);
   while (residents.length >= cap) {
     const candidate = residents.sort((left, right) => Date.parse(left.state.idleDeadline) - Date.parse(right.state.idleDeadline))[0]!;
-    const stopped = await serverStop(candidate.state.root);
-    if ('category' in stopped) throw new Error(`Could not stop resident ${candidate.state.root}: ${stopped.code}`);
+    if (!await evict(candidate.state)) return;
     residents = liveResidents(paths);
   }
 }
+
+async function evict(state: PublishedState): Promise<boolean> {
+  const victim = pathsForRoot(state.root);
+  if (existsSync(victim.port)) {
+    const stopped = exchange(victim, request(state.root, 'stop')).catch(() => undefined);
+    await Promise.race([stopped, delay(5_000)]);
+    if (await exited(state.pid, 5_000)) return true;
+  }
+  for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
+    try { process.kill(state.pid, signal); } catch { /* already gone */ }
+    if (await exited(state.pid, 2_000)) { removeEndpoint(victim); return true; }
+  }
+  return false;
+}
+
+async function exited(pid: number, withinMs: number): Promise<boolean> {
+  const deadline = performance.now() + withinMs;
+  while (processExists(pid)) {
+    if (performance.now() >= deadline) return false;
+    await delay(25);
+  }
+  return true;
+}
+
+function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function liveResidents(paths: ServerPaths): Resident[] {
   const base = path.dirname(paths.state);

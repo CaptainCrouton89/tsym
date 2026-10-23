@@ -61,7 +61,7 @@ function receipt(completion: Completion): string {
     const answer = completion as Answer & { startupMs?: number };
     const base = answer.receipt ?? `${answer.count} answer${answer.count === 1 ? '' : 's'}, 0 ms`;
     const receipt = answer.startupMs === undefined ? base : `${base} (server started, ${answer.startupMs} ms)`;
-    return answer.contextError ? `${answer.contextError}\n${receipt}` : receipt;
+    return answer.contextError ? `context unavailable (the answer above is complete): ${answer.contextError}\n${receipt}` : receipt;
   }
   return completion.category === 'invocation' ? `invocation rejected, 0 ms` : `tool failed, 0 ms`;
 }
