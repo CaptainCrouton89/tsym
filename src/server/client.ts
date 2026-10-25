@@ -5,6 +5,7 @@ import { connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import type { Completion, Invocation, ToolError } from '../commands/types.js';
+import { readMetadata } from '../store/meta.js';
 import { discoverRoot, ensureStateDirectory, maxResidents, pathsForRoot, readState, removeEndpoint, type PublishedState, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, request, type PhaseFrame, type ResponseFrame, type WireFrame, writeFrame } from './wire.js';
 
@@ -85,6 +86,9 @@ async function ensure(root: string, force = false, rebuild = false): Promise<Com
   const startedAt = performance.now();
   ensureStateDirectory(paths);
   const log = openSync(paths.log, 'a', 0o600);
+  // A cold start on a large root takes tens of seconds; say so, so a caller with a short tool timeout can tell waiting from hung.
+  const lastIndexMs = readMetadata(paths.store)?.indexDurationMs;
+  process.stderr.write(`tsym: starting a resident for ${root}${lastIndexMs ? `; the last index took ${Math.round(lastIndexMs / 1000)} s, so expect that long` : ''}. Later calls answer in milliseconds.\n`);
   let childExit: string | undefined;
   try {
     const child = spawn(process.execPath, ['--max-old-space-size=3072', fileURLToPath(new URL('../../dist/server/main.js', import.meta.url)), '--root', root, ...(rebuild ? ['--rebuild'] : [])], { detached: true, stdio: ['ignore', log, log] });
