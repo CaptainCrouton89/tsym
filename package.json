@@ -1,6 +1,6 @@
 {
   "name": "@crouton-kit/tsym",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Symbol-level reading of a TypeScript codebase for agents.",
   "type": "module",
   "license": "MIT",
