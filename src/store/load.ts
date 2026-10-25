@@ -217,13 +217,8 @@ function readRelationships(store: Store, type: RelationshipType, target: Relatio
   const source = type === 'CHANGED' ? 'Commit' : 'Declaration';
   const columns = relationshipColumns(type).filter((column) => column !== 'from' && column !== 'to').map((column) => `r.${column} AS ${column}`).join(', ');
   const returned = [`a.${type === 'CHANGED' ? 'hash' : 'key'} AS from`, `b.${target === 'Commit' ? 'hash' : 'key'} AS to`, columns].filter(Boolean).join(', ');
-  const rows: ReturnType<Store['execute']> = [];
-  const pageSize = 50_000;
-  for (let offset = 0;; offset += pageSize) {
-    const page = store.execute(`MATCH (a:${source})-[r:${type}]->(b:${target}) RETURN ${returned} SKIP ${offset} LIMIT ${pageSize}`);
-    rows.push(...page);
-    if (page.length < pageSize) break;
-  }
+  // One unpaged read: SKIP/LIMIT without a total order over a parallel scan returns overlapping pages and drops rows.
+  const rows = store.execute(`MATCH (a:${source})-[r:${type}]->(b:${target}) RETURN ${returned}`);
   return rows.map((row) => {
     const relationship: RelationshipRow = { type, from: String(row.from), to: String(row.to), target };
     for (const column of relationshipColumns(type)) {
