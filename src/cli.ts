@@ -1,3 +1,7 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { declarationError } from './commands/handlers.js';
+import { DeclarationError } from './core/declarations.js';
 import { renderHelp } from './commands/help.js';
 import { localSearch } from './commands/handlers/search.js';
 import { applyRenamePlan, type RenameAnswer } from './commands/rename-apply.js';
@@ -28,8 +32,15 @@ async function dispatch(invocation: Invocation): Promise<Completion> {
     case 'search': return localSearch(invocation);
     case 'rename': return applyRename(invocation);
     case 'query': return queryFromStdin(invocation);
+    case 'outline': return missingOutlinePath(invocation) ?? invokeResident(invocation);
     default: return invokeResident(invocation);
   }
+}
+
+/** A literal path that does not exist is answered here, before any resident is started or waited on. */
+function missingOutlinePath(invocation: Invocation): Completion | undefined {
+  const missing = invocation.input.args.find((input) => !/[*?[{]/.test(input) && !existsSync(path.resolve(invocation.cwd, input)));
+  return missing === undefined ? undefined : declarationError(new DeclarationError('no-such-path', `${missing} does not exist`), invocation);
 }
 
 async function queryFromStdin(invocation: Invocation): Promise<Completion> {
