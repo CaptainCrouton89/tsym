@@ -28,7 +28,7 @@ const handler: SemanticHandler = async (context, invocation) => {
   }
 
   const { store, index } = context;
-  if (!store || !index) throw new Error('The query leaf requires the resident store and index state.');
+  if (!store) throw new Error('The query leaf requires the resident store.');
   const started = performance.now();
   let records: StoreRow[];
   try {
@@ -54,7 +54,7 @@ const handler: SemanticHandler = async (context, invocation) => {
   return {
     data: {
       element: 'query',
-      attributes: { rows: rows.length, shown: shown.length, indexedAt: index.indexedAt, state: index.state, ms: elapsed },
+      attributes: { rows: rows.length, shown: shown.length, indexedAt: index?.indexedAt, state: index?.state, ms: elapsed },
       text: shown.join('\n'),
       children: shown.length < rows.length && resultPath !== undefined
         ? [{ element: 'truncated', attributes: { rows: rows.length, shown: shown.length, file: resultPath }, text: 'Re-run with --rows 0 for every row on stdout.' }]

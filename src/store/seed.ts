@@ -5,7 +5,7 @@ import { connect } from 'node:net';
 import path from 'node:path';
 import { type ServerPaths, pathsForRoot } from '../server/lifecycle.js';
 import { NdjsonReader, WIRE_VERSION, type ResponseFrame, writeFrame } from '../server/wire.js';
-import { readMetadata, sameFormat, writeMetadata, type StoreFormatIdentity, type StoreMetadata } from './meta.js';
+import { changedFiles, readMetadata, sameFormat, writeMetadata, type StoreFormatIdentity, type StoreMetadata } from './meta.js';
 
 interface Candidate { root: string; store: string; metadata: StoreMetadata; }
 export interface SeedReceipt { root: string; bytes: number; durationMs: number; }
@@ -56,7 +56,7 @@ function siblings(root: string, paths: ServerPaths, expected: StoreMetadata, ide
     let metadata: StoreMetadata | null;
     try { metadata = readMetadata(store); } catch { continue; }
     if (metadata === null || metadata.root === root || !sameFormat(metadata, identity)) continue;
-    if (fileDifference(metadata.files, expected.files) !== 0) continue;
+    if (changedFiles(metadata, expected) !== 0) continue;
     candidates.push({ root: metadata.root, store, metadata });
   }
   return candidates;
@@ -111,13 +111,6 @@ function requestSeed(port: string, root: string, dest: string): Promise<{ root: 
 }
 
 function seedPath(paths: ServerPaths): string { return path.join(paths.state, 'store.seed'); }
-
-function fileDifference(left: Record<string, string>, right: Record<string, string>): number {
-  const files = new Set([...Object.keys(left), ...Object.keys(right)]);
-  let differing = 0;
-  for (const file of files) if (left[file] !== right[file]) differing++;
-  return differing;
-}
 
 function directoryBytes(directory: string): number {
   let bytes = 0;
