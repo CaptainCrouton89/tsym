@@ -12,12 +12,13 @@ import { ingestCommits } from '../index/commits.js';
 import { refreshIndex } from '../index/refresh.js';
 import { IndexStateController } from '../index/state.js';
 import { watchIndex, type IndexWatcher, type WatchBatch } from '../index/watch.js';
-import { discardIncompatibleStore, formatIdentity, hasDrift, metadataFor, readMetadata, writeMetadata } from '../store/meta.js';
+import { changedFiles, discardIncompatibleStore, formatIdentity, hasDrift, metadataFor, readMetadata, writeMetadata, type StoreFormatIdentity, type StoreMetadata } from '../store/meta.js';
 import { copyStore, refuseSeed, seedFromSibling } from '../store/seed.js';
 import { EngineBinaryError, openStore, Store, StoreRecoveryError } from '../store/store.js';
 import { executeSemantic } from '../commands/handlers.js';
 import { findNode } from '../commands/tree.js';
-import type { Completion, ToolError } from '../commands/types.js';
+import type { Completion, OutputNode, ToolError } from '../commands/types.js';
+import type { ProjectRegistry } from './projects.js';
 
 interface Queued {
   request: WireRequest;
@@ -54,6 +55,12 @@ async function main(): Promise<void> {
   const bootedAt = new Date();
   const bootedAtMonotonic = performance.now();
   let bootstrapped = false;
+  /** Set while answers come from the stored index because the live index has not loaded yet. */
+  let storedIndex: { metadata: StoreMetadata; expected: () => StoreMetadata } | undefined;
+  let deferredIndex: (() => Promise<void>) | undefined;
+  let indexing: Promise<void> | undefined;
+  /** A background live-index build that failed after a stored-index answer; reported by status and returned to the next request. */
+  let indexFailure: unknown;
   let seededFrom: string | undefined;
   let loading = false;
   let stopping = false;
@@ -231,24 +238,34 @@ async function main(): Promise<void> {
     if (active) sendPhase(active.socket, active.request.requestId, 'running', 120_000);
   };
 
+  const sendStartupPhase = (phase: Extract<WireFrame, { type: 'phase' }>['phase'], remainingMs: number | undefined, startup?: { socket: Socket; requestId: string }) => {
+    if (active) sendPhase(active.socket, active.request.requestId, phase, remainingMs);
+    for (const queued of queue) sendPhase(queued.socket, queued.request.requestId, phase, remainingMs);
+    if (startup) sendPhase(startup.socket, startup.requestId, phase, remainingMs);
+  };
+  // A failed load must leave nothing open, or the next attempt fails on store ownership instead of its real cause.
+  const unload = () => {
+    watcher?.close(); watcher = undefined;
+    store?.close(); store = undefined;
+    if (semantic) semantic.store = undefined;
+    storedIndex = undefined;
+    deferredIndex = undefined;
+    bootstrapped = false;
+  };
+
+  /**
+   * Loads the TypeScript projects and opens the store. A compatible stored index is served at once while the live index
+   * waits in `deferredIndex`; with no stored index to serve, the live index is built before this resolves.
+   */
   const loadProjects = async (startup?: { socket: Socket; requestId: string }) => {
     loading = true;
-    const sendStartupPhase = (phase: Extract<WireFrame, { type: 'phase' }>['phase'], remainingMs?: number) => {
-      if (active) sendPhase(active.socket, active.request.requestId, phase, remainingMs);
-      for (const queued of queue) sendPhase(queued.socket, queued.request.requestId, phase, remainingMs);
-      if (startup) sendPhase(startup.socket, startup.requestId, phase, remainingMs);
-    };
     let deadlineTimer: NodeJS.Timeout | undefined;
-    const deadline = (phase: 'project-load' | 'index-build', durationMs: number) => new Promise<never>((_, reject) => {
-      deadlineTimer = setTimeout(() => reject(new DeadlineExceeded(phase)), durationMs);
-      deadlineTimer.unref();
-    });
     try {
       loadDeadlineAt = performance.now() + 60_000;
       for (const queued of queue) pauseQueueDeadline(queued);
-      sendStartupPhase('project-load-start', 60_000);
+      sendStartupPhase('project-load-start', 60_000, startup);
       semantic ??= createSemanticContext(root);
-      const { program, projects } = semantic;
+      const { projects } = semantic;
       const { configured, identity, expected } = await Promise.race([
         (async () => {
           await projects.bootstrap();
@@ -265,42 +282,83 @@ async function main(): Promise<void> {
           }
           return { configured, identity, expected };
         })(),
-        deadline('project-load', 60_000),
+        new Promise<never>((_, reject) => {
+          deadlineTimer = setTimeout(() => reject(new DeadlineExceeded('project-load')), 60_000);
+          deadlineTimer.unref();
+        }),
       ]);
-      if (deadlineTimer) clearTimeout(deadlineTimer);
-      deadlineTimer = undefined;
+      clearTimeout(deadlineTimer);
       loadDeadlineAt = undefined;
       const opened = openStore(paths.store, (message) => append(paths, message));
       store = opened.store;
       // A recovered store is empty; bypass its (absent) metadata explicitly so nothing reuses or seeds around the rebuild.
       const rebuild = forceRebuild || opened.recovered !== undefined;
-      indexBuildDeadlineAt = performance.now() + 180_000;
-      sendStartupPhase('index-build-start', 180_000);
+      const metadata = rebuild ? null : readMetadata(store.path);
+      bootstrapped = true;
+      if (metadata !== null) {
+        storedIndex = { metadata, expected: () => metadataFor(root, configured, headCommit(root), 0, identity) };
+        semantic.store = store;
+        deferredIndex = () => indexProjects(configured, identity, metadata, undefined);
+        append(paths, `answering from the stored index indexedAt=${metadata.indexedAt} changedSince=${changedSince(metadata, expected)}`);
+      } else {
+        loading = false;
+        await indexProjects(configured, identity, null, opened.recovered, startup);
+      }
+    } catch (error) {
+      unload();
+      throw error;
+    } finally {
+      clearTimeout(deadlineTimer);
+      loading = false;
+      loadDeadlineAt = undefined;
+      if (bootstrapped && !retired) for (const queued of queue) armQueueDeadline(queued);
+    }
+  };
+
+  /** Walks the program, or rehydrates the stored graph and refreshes it when the workspace drifted, then publishes the live index. */
+  const indexProjects = async (configured: ReturnType<ProjectRegistry['configured']>, identity: StoreFormatIdentity, metadata: StoreMetadata | null, recovered: { preserved: string } | undefined, startup?: { socket: Socket; requestId: string }) => {
+    loading = true;
+    deferredIndex = undefined;
+    for (const queued of queue) pauseQueueDeadline(queued);
+    const program = semantic!.program;
+    indexBuildDeadlineAt = performance.now() + 180_000;
+    sendStartupPhase('index-build-start', 180_000, startup);
+    let deadlineTimer: NodeJS.Timeout | undefined;
+    try {
+      if (metadata !== null) {
+        // Re-read configs and membership now: the watcher sees only edits from here on, so a config edit or a new source
+        // file since project load would otherwise be missing from an index published as current. The update must precede
+        // the rediscovery, which reads membership from the updated config text.
+        program.update({ fileChanges: { invalidateAll: true } });
+        configured.reload();
+      }
       // The watcher starts before the build, not after it: buildIndex takes tens of seconds on a large workspace,
       // and an edit landing in that window would otherwise never be recorded, publishing a stale index as current.
       // buildIndex is synchronous, so no watch callback can run until index is assigned below.
       watcher = watchIndex(root, configured, refresh, (error) => append(paths, `index refresh failure: ${safe(error)}`), (flush) => index?.markStale(flush));
-      const metadata = readMetadata(store.path);
       let built: ReturnType<typeof buildIndex> | undefined;
       await Promise.race([
         (async () => {
-          if (!rebuild && metadata !== null) {
+          if (metadata !== null) {
             const reused = reuseIndex(store!);
-            if (hasDrift(metadata, expected)) {
+            // Measured now, not at project load: an edit made while the stored index was answering must still be indexed.
+            if (hasDrift(metadata, metadataFor(root, configured, headCommit(root), 0, identity))) {
               const refreshed = refreshIndex(root, program, configured, store!, reused, { fileChanges: { invalidateAll: true } }, identity);
               append(paths, `index refresh stored=${refreshed.stored} changedFiles=${refreshed.changedFiles.length} duration=${Math.round(refreshed.built.receipt.durationMs)}ms`);
               built = refreshed.built;
             } else built = reused;
           } else {
             try { built = buildIndex(root, program, configured, store!, identity); }
-            catch (error) { throw opened.recovered ? new StoreRecoveryError(paths.store, opened.recovered.preserved, error) : error; }
-            if (opened.recovered) append(paths, `store recovered: fresh index built, corrupt store kept at ${opened.recovered.preserved} duration=${Math.round(built.receipt.durationMs)}ms`);
+            catch (error) { throw recovered ? new StoreRecoveryError(paths.store, recovered.preserved, error) : error; }
+            if (recovered) append(paths, `store recovered: fresh index built, corrupt store kept at ${recovered.preserved} duration=${Math.round(built.receipt.durationMs)}ms`);
           }
         })(),
-        deadline('index-build', 180_000),
+        new Promise<never>((_, reject) => {
+          deadlineTimer = setTimeout(() => reject(new DeadlineExceeded('index-build')), 180_000);
+          deadlineTimer.unref();
+        }),
       ]);
-      if (deadlineTimer) clearTimeout(deadlineTimer);
-      deadlineTimer = undefined;
+      clearTimeout(deadlineTimer);
       const indexBuildRemaining = remaining(indexBuildDeadlineAt);
       indexBuildDeadlineAt = undefined;
       index = new IndexStateController({ indexedAt: indexedAt(root), state: 'current', built: built! }, (snapshot) => {
@@ -309,45 +367,97 @@ async function main(): Promise<void> {
       });
       built = undefined;
       semantic!.store = store;
-      sendStartupPhase('index-build-end', indexBuildRemaining);
-      bootstrapped = true;
+      storedIndex = undefined;
+      sendStartupPhase('index-build-end', indexBuildRemaining, startup);
+    } catch (error) {
+      unload();
+      throw error;
     } finally {
-      if (deadlineTimer) clearTimeout(deadlineTimer);
-      if (!bootstrapped) {
-        // A failed load must leave nothing open, or the next attempt fails on store ownership instead of its real cause.
-        watcher?.close(); watcher = undefined;
-        store?.close(); store = undefined;
-      }
+      clearTimeout(deadlineTimer);
       loading = false;
-      loadDeadlineAt = undefined;
       indexBuildDeadlineAt = undefined;
-      if (bootstrapped && !retired) for (const queued of queue) armQueueDeadline(queued);
+      if (!retired) for (const queued of queue) armQueueDeadline(queued);
     }
+  };
+
+  /** Starts the deferred live index at most once; every caller waits on the same build. */
+  const ensureIndex = (): Promise<void> => {
+    if (indexing) return indexing;
+    if (!deferredIndex) return Promise.resolve();
+    const tracked: Promise<void> = deferredIndex().finally(() => { if (indexing === tracked) indexing = undefined; });
+    indexing = tracked;
+    return tracked;
+  };
+  /** The live index builds once no stored-index answer is waiting, so queued reads are answered before the walk blocks the resident. */
+  const indexWhenIdle = () => setImmediate(() => {
+    if (retired || stopping || active || queue.length > 0 || !deferredIndex) return;
+    ensureIndex().catch((error) => {
+      if (error instanceof DeadlineExceeded) startupTimeout(error.phase);
+      else {
+        indexFailure = error;
+        append(paths, `background index failed; the next request reports it, and the one after reloads the workspace\n${error instanceof Error && error.stack ? error.stack : safe(error)}`);
+      }
+    });
+  });
+
+  /** Labels an answer read from the stored index before the live index loaded, with the index's age and what changed since. */
+  const storedAnswer = (completion: Completion): Completion => {
+    if (!storedIndex || ('category' in completion && completion.category === 'tool')) return completion;
+    const { indexedAt } = storedIndex.metadata;
+    const age = ageOf(indexedAt);
+    // Measured per answer, not once at startup: the watcher is not running yet, so an edit since startup shows only here.
+    const since = changedSince(storedIndex.metadata, storedIndex.expected());
+    const label = { index: 'stored', indexedAt, age, changedSince: since };
+    const labelled = (node: OutputNode): OutputNode => ({ ...node, attributes: { ...node.attributes, ...label } });
+    const changed = since === 'none'
+      ? 'no source file changed since'
+      : `${since} changed since, so lines and relations there may be out of date`;
+    const notice = `answered from the stored index built ${age} (${changed}); the live index is loading`;
+    if ('category' in completion) return { ...completion, problems: completion.problems.map((problem) => ({ ...problem, next: `${problem.next ?? ''} This was ${notice}; retry once it has loaded if the input is right.`.trim() })) };
+    const receipt = completion.receipt ?? `${completion.count} answer${completion.count === 1 ? '' : 's'}, 0 ms`;
+    return { ...completion, data: Array.isArray(completion.data) ? completion.data.map(labelled) : labelled(completion.data), receipt: `${receipt}; ${notice}` };
   };
 
   const processQueue = async (): Promise<void> => {
     if (active || retired) return;
     if (stopping) { completeStop(); return; }
     const queued = queue.shift();
-    if (!queued) { touch(); return; }
+    if (!queued) { touch(); indexWhenIdle(); return; }
     if (queued.queueTimer) clearTimeout(queued.queueTimer);
     if (queued.socket.destroyed) { void processQueue(); return; }
     active = queued;
     currentCommand = undefined;
     sendPhase(queued.socket, queued.request.requestId, 'running', 120_000);
+    // Set while the live index builds, so its failure is not reported as a failure to load the project.
+    let building = false;
     try {
-      if (!bootstrapped) await loadProjects();
+      if (!bootstrapped) {
+        const failure = indexFailure;
+        indexFailure = undefined;
+        building = failure !== undefined;
+        if (failure !== undefined) throw failure;
+        await loadProjects();
+      }
       if (retired) return;
-      armActiveDeadline();
       const requestInvocation = queued.request.invocation;
       if (!requestInvocation) throw new Error('invoke request omitted its invocation');
-      currentCommand = requestInvocation.path.join(' ');
       const declaration = findNode(requestInvocation.path).node;
-      if (readsIndex(declaration.handler)) await index?.wait();
-      const completion = await executeSemantic(semantic!, { root, cwd: requestInvocation.cwd, json: false, path: requestInvocation.path, declaration, input: { args: requestInvocation.args, flags: requestInvocation.flags, explicit: new Set(requestInvocation.explicit) } });
+      // Store readers answer from the stored index while the live index waits; every other command needs the live program walked.
+      const fromStoredIndex = storedIndex !== undefined && readsIndex(declaration.handler);
+      building = true;
+      if (!fromStoredIndex) await ensureIndex();
+      building = false;
+      if (retired) return;
+      armActiveDeadline();
+      currentCommand = requestInvocation.path.join(' ');
+      if (!fromStoredIndex && readsIndex(declaration.handler)) await index?.wait();
+      const answered = await executeSemantic(semantic!, { root, cwd: requestInvocation.cwd, json: false, path: requestInvocation.path, declaration, input: { args: requestInvocation.args, flags: requestInvocation.flags, explicit: new Set(requestInvocation.explicit) } });
+      const completion = fromStoredIndex ? storedAnswer(answered) : answered;
       if ('category' in completion && completion.category === 'tool' && !completion.logPath) completion.logPath = paths.log;
       if (!retired) respond(queued.socket, queued.request.requestId, completion);
     } catch (error) {
+      // A request that waited on the failed background build receives the failure itself; the next request reloads.
+      if (error === indexFailure) indexFailure = undefined;
       if (error instanceof DeadlineExceeded) {
         startupTimeout(error.phase);
         return;
@@ -361,7 +471,7 @@ async function main(): Promise<void> {
         return;
       }
       if (!retired) {
-        if (!bootstrapped) respond(queued.socket, queued.request.requestId, loadFailure(error));
+        if (!bootstrapped) respond(queued.socket, queued.request.requestId, building ? { ...toolError('index-build-failed', 'The project loaded, but tsym could not build its live index.', 'Read the log, then retry; the next call reloads the workspace and builds the index again.'), received: safe(error) } : loadFailure(error));
         else {
           append(paths, `command failed command=${currentCommand ?? 'unknown'}\n${error instanceof Error && error.stack ? error.stack : safe(error)}`);
           const failure = toolError('command-failed', safe(error), 'Read the resident log, then retry the command.');
@@ -455,7 +565,7 @@ async function main(): Promise<void> {
       const snapshot = index?.current();
       const receipt = snapshot?.built.receipt;
       const indexedCommit = readMetadata(paths.store)?.indexedCommit;
-      respond(socket, request.requestId, { data: { element: 'server', attributes: { root, state, pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s`, maxResidents: maxResidents(), uptime: `${Math.floor(performance.now() - bootedAtMonotonic)}ms`, memory, typescript: semantic ? bundledTypeScriptVersion() : undefined, store: paths.store, seededFrom, indexedCommit, declarations: receipt?.declarations, edges: receipt ? Object.values(receipt.relationships).reduce((total, count) => total + count, 0) : undefined, notInProgram: semantic ? unconfiguredFileCount(root, semantic.projects.records()) : undefined, index: snapshot?.state, indexDuration: receipt ? `${Math.round(receipt.durationMs)}ms` : undefined } }, count: 1 });
+      respond(socket, request.requestId, { data: { element: 'server', attributes: { root, state, pid: process.pid, port: paths.port, log: paths.log, idle: `${idleSeconds()}s`, maxResidents: maxResidents(), uptime: `${Math.floor(performance.now() - bootedAtMonotonic)}ms`, memory, typescript: semantic ? bundledTypeScriptVersion() : undefined, store: paths.store, seededFrom, indexedCommit, declarations: receipt?.declarations, edges: receipt ? Object.values(receipt.relationships).reduce((total, count) => total + count, 0) : undefined, notInProgram: semantic ? unconfiguredFileCount(root, semantic.projects.records()) : undefined, index: snapshot?.state ?? (storedIndex ? 'stored' : indexFailure !== undefined ? 'failed' : undefined), indexError: indexFailure !== undefined ? safe(indexFailure) : undefined, indexDuration: receipt ? `${Math.round(receipt.durationMs)}ms` : undefined } }, count: 1 });
       return;
     }
     if (request.operation === 'stop') {
@@ -511,6 +621,21 @@ function append(paths: ServerPaths, message: string): void { appendFileSync(path
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function readsIndex(handler: string | undefined): boolean {
   return handler === 'outline' || handler === 'find' || handler === 'show' || handler === 'inspect' || handler === 'query';
+}
+
+function changedSince(metadata: StoreMetadata, expected: StoreMetadata): string {
+  const changed = changedFiles(metadata, expected);
+  if (changed > 0) return `${changed} file${changed === 1 ? '' : 's'}`;
+  return hasDrift(metadata, expected) ? 'project configuration' : 'none';
+}
+
+function ageOf(iso: string): string {
+  const seconds = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  if (!Number.isFinite(seconds)) return 'at an unknown time';
+  if (seconds < 120) return `${seconds} s ago`;
+  if (seconds < 7_200) return `${Math.round(seconds / 60)} min ago`;
+  if (seconds < 172_800) return `${Math.round(seconds / 3_600)} h ago`;
+  return `${Math.round(seconds / 86_400)} d ago`;
 }
 
 function indexedAt(root: string): string {

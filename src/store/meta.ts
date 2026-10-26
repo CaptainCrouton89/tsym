@@ -23,6 +23,8 @@ export interface StoreMetadata {
   lockfileHash: string;
   /** Duration of the index operation that wrote this metadata; reported by `server status` after a reuse. */
   indexDurationMs: number;
+  /** When the index operation that wrote this metadata finished; an answer read from the stored index reports its age from this. */
+  indexedAt: string;
   files: Record<string, IndexedFileMeta>;
 }
 
@@ -80,6 +82,7 @@ export function metadataFor(root: string, projects: ConfiguredProjects, indexedC
     packageHash: hashOptional(path.join(root, 'package.json')),
     lockfileHash: lockfiles.map((name) => `${name}:${hashOptional(path.join(root, name))}`).join('|'),
     indexDurationMs,
+    indexedAt: new Date().toISOString(),
     files: Object.fromEntries(files.map((file) => [relative(root, file), hashFile(file)])),
   };
 }
@@ -88,12 +91,20 @@ export function hasDrift(metadata: StoreMetadata, expected: StoreMetadata): bool
   return JSON.stringify(driftShape(metadata)) !== JSON.stringify(driftShape(expected));
 }
 
+/** Workspace files whose content, presence or absence differs between two metadata records. */
+export function changedFiles(metadata: StoreMetadata, expected: StoreMetadata): number {
+  const files = new Set([...Object.keys(metadata.files), ...Object.keys(expected.files)]);
+  let changed = 0;
+  for (const file of files) if (metadata.files[file] !== expected.files[file]) changed++;
+  return changed;
+}
+
 export function sameFormat(metadata: Pick<StoreMetadata, 'schemaVersion' | 'tsVersion' | 'engineVersion' | 'tsymBuild'>, identity: StoreFormatIdentity): boolean {
   return metadata.schemaVersion === identity.schemaVersion && metadata.tsVersion === identity.tsVersion && metadata.engineVersion === identity.engineVersion && metadata.tsymBuild === identity.tsymBuild;
 }
 
-function driftShape(metadata: StoreMetadata): Omit<StoreMetadata, 'indexedCommit' | 'indexDurationMs'> {
-  const { indexedCommit: _commit, indexDurationMs: _duration, ...shape } = metadata;
+function driftShape(metadata: StoreMetadata): Omit<StoreMetadata, 'indexedCommit' | 'indexDurationMs' | 'indexedAt'> {
+  const { indexedCommit: _commit, indexDurationMs: _duration, indexedAt: _at, ...shape } = metadata;
   return shape;
 }
 
