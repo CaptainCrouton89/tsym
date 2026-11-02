@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { declarationError } from './commands/handlers.js';
 import { DeclarationError } from './core/declarations.js';
@@ -9,7 +9,7 @@ import { parseInvocation } from './commands/tree.js';
 import type { Answer, Completion, Invocation, OutputNode } from './commands/types.js';
 import { renderCompletion, renderNode } from './output.js';
 import { invokeResident, serverReload, serverStatus, serverStop } from './server/client.js';
-import { discoverRoot, pathsForRoot, readState } from './server/lifecycle.js';
+import { discoverRoot, findProjectRoot, pathsForRoot, readState } from './server/lifecycle.js';
 import { readMetadata } from './store/meta.js';
 
 async function main(argv: string[]): Promise<number> {
@@ -21,7 +21,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if ('category' in parsed) return emit(parsed, false);
-  return emit(await dispatch(parsed), parsed.json);
+  return emit(await dispatch(anchorOperands(parsed)), parsed.json);
 }
 
 async function dispatch(invocation: Invocation): Promise<Completion> {
@@ -35,6 +35,37 @@ async function dispatch(invocation: Invocation): Promise<Completion> {
     case 'outline': return missingOutlinePath(invocation) ?? invokeResident(invocation);
     default: return invokeResident(invocation);
   }
+}
+
+/**
+ * Outline and check operands are filesystem paths, so they decide where they are read:
+ * - without --root, from a directory that is in no project, the root is the project holding the first operand that exists;
+ * - with --root, a relative operand that does not land under the root resolves from the root, and an operand reaches the root through its real path, so a symlinked root such as /tmp on macOS still matches.
+ */
+function anchorOperands(invocation: Invocation): Invocation {
+  if (invocation.declaration.handler !== 'outline' && invocation.declaration.handler !== 'check') return invocation;
+  const operands = invocation.input.args.filter((input) => !/[*?[{]/.test(input));
+  if (invocation.root === undefined) {
+    if (findProjectRoot(invocation.cwd) !== undefined) return invocation;
+    for (const input of operands) {
+      const file = path.resolve(invocation.cwd, input);
+      if (!existsSync(file)) continue;
+      const root = findProjectRoot(statSync(file).isDirectory() ? file : path.dirname(file));
+      if (root !== undefined) return { ...invocation, root };
+    }
+    return invocation;
+  }
+  const root = discoverRoot(invocation.root);
+  const under = (file: string) => !path.relative(root, file).startsWith('..') && !path.isAbsolute(path.relative(root, file));
+  const args = invocation.input.args.map((input) => {
+    if (/[*?[{]/.test(input)) return input;
+    const fromCwd = path.resolve(invocation.cwd, input);
+    if (under(fromCwd)) return input;
+    if (existsSync(fromCwd) && under(realpathSync(fromCwd))) return realpathSync(fromCwd);
+    const fromRoot = path.resolve(root, input);
+    return existsSync(fromRoot) ? fromRoot : input;
+  });
+  return { ...invocation, input: { ...invocation.input, args } };
 }
 
 /** A literal path that does not exist is answered here, before any resident is started or waited on. */

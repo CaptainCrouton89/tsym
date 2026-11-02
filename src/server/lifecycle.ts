@@ -6,10 +6,10 @@ import path from 'node:path';
 export interface ServerPaths { root: string; state: string; lock: string; port: string; pid: string; log: string; store: string; results: string; }
 export interface PublishedState { root: string; pid: number; bootedAt: string; port: string; log: string; idleDeadline: string; state: 'ready' | 'stopping'; index?: 'current' | 'stale'; declarations?: number; }
 
-export function discoverRoot(input: string | undefined, cwd = process.cwd()): string {
-  let current = path.resolve(input ?? cwd);
+/** The nearest ancestor of `start` holding a tsconfig.json, else package.json, else .git; undefined when none does. */
+export function findProjectRoot(start: string): string | undefined {
   for (const marker of ['tsconfig.json', 'package.json', '.git']) {
-    let candidate = current;
+    let candidate = path.resolve(start);
     for (;;) {
       if (existsSync(path.join(candidate, marker))) return realpathSync(candidate);
       const parent = path.dirname(candidate);
@@ -17,7 +17,12 @@ export function discoverRoot(input: string | undefined, cwd = process.cwd()): st
       candidate = parent;
     }
   }
-  return realpathSync(current);
+  return undefined;
+}
+
+export function discoverRoot(input: string | undefined, cwd = process.cwd()): string {
+  const start = path.resolve(input ?? cwd);
+  return findProjectRoot(start) ?? realpathSync(start);
 }
 
 export function pathsForRoot(root: string): ServerPaths {
