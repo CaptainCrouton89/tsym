@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Project } from 'typescript/unstable/sync';
 import { Ts7Host } from './api.js';
@@ -71,13 +71,18 @@ function assertRootNotTooBroad(root: string, configs: readonly string[]): void {
   throw new Error(`${root} has no tsconfig.json of its own but contains ${configs.length} nested ones (limit ${maxNestedConfigs}); indexing it would exhaust memory. Pass --root with the repository or package directory you mean.`);
 }
 
-/** Every non-skipped directory in the workspace, including the root. */
+/** Every non-skipped directory in the workspace, excluding nested Git worktrees but including the root. */
 export function discoverDirectories(root: string): string[] {
   const directories = [path.resolve(root)];
   const visit = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isDirectory() || skippedDirectories.has(entry.name)) continue;
       const full = path.resolve(dir, entry.name);
+      const gitFile = path.join(full, '.git');
+      if (statOrNull(gitFile)?.isFile()) {
+        const gitDir = /^gitdir: (.+)$/m.exec(readFileSync(gitFile, 'utf8'))?.[1]?.trim();
+        if (gitDir && statOrNull(path.resolve(full, gitDir, 'commondir'))?.isFile()) continue;
+      }
       directories.push(full);
       visit(full);
     }
