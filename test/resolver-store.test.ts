@@ -32,6 +32,7 @@ function fixture(prepare: (root: string) => void = () => {}): { root: string; co
   const resolver = new DeclarationResolver(root, source, () => store);
   const projects = {
     bootstrap: async () => [],
+    refreshFile() {},
     membership: async (file: string) => configured.membership(file),
   };
   const context = { root, program, source, resolver, store, projects } as unknown as SemanticContext;
