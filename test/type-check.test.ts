@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, rmSync, watch, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -103,10 +103,14 @@ test('check reports file diagnostics, filters before the limit, and clean files 
 
 function endpointRemoved(port: string): Promise<void> {
   if (!existsSync(port)) return Promise.resolve();
+  // Polls rather than watching: an fs.watch event can be delayed or dropped (FSEvents under load), while the assertion is only that the file is gone.
   return new Promise((resolve, reject) => {
-    const watcher = watch(path.dirname(port), () => {
-      if (!existsSync(port)) { watcher.close(); resolve(); }
-    });
-    setTimeout(() => { watcher.close(); reject(new Error('resident did not remove its endpoint')); }, 5_000).unref();
+    const deadline = Date.now() + 5_000;
+    const check = () => {
+      if (!existsSync(port)) resolve();
+      else if (Date.now() > deadline) reject(new Error('resident did not remove its endpoint'));
+      else setTimeout(check, 50).unref();
+    };
+    check();
   });
 }

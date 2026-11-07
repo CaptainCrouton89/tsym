@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, watch, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -388,10 +388,14 @@ function processExists(pid: number): boolean {
 
 function endpointRemoved(port: string, timeout = 5_000): Promise<void> {
   if (!existsSync(port)) return Promise.resolve();
+  // Polls rather than watching: an fs.watch event can be delayed or dropped (FSEvents under load), while the assertion is only that the file is gone.
   return new Promise((resolve, reject) => {
-    const watcher = watch(path.dirname(port), () => {
-      if (!existsSync(port)) { watcher.close(); resolve(); }
-    });
-    setTimeout(() => { watcher.close(); reject(new Error('resident did not remove its endpoint')); }, timeout).unref();
+    const deadline = Date.now() + timeout;
+    const check = () => {
+      if (!existsSync(port)) resolve();
+      else if (Date.now() > deadline) reject(new Error('resident did not remove its endpoint'));
+      else setTimeout(check, 50).unref();
+    };
+    check();
   });
 }
