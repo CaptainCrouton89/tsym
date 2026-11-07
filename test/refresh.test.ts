@@ -255,7 +255,7 @@ test('a file deleted during its creation refresh schedules another full refresh'
     }, (error) => { throw error; }, () => {});
     try {
       writeFileSync(transient, 'export const transient = true;\n');
-      await first;
+      await Promise.race([first, new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`batches: ${JSON.stringify(batches)}`)), 5_000).unref())]);
       rmSync(transient);
       release();
       await Promise.race([second, new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`batches: ${JSON.stringify(batches)}`)), 5_000).unref())]);
