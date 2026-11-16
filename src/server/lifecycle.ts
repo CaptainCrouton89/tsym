@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, chmodSync } from 'node:fs';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 
@@ -48,6 +48,42 @@ export function readState(paths: ServerPaths): PublishedState | null {
 export function publishState(paths: ServerPaths, state: PublishedState): void {
   writeFileSync(paths.pid, JSON.stringify(state) + '\n', { mode: 0o600 });
   chmodSync(paths.pid, 0o600);
+}
+
+/** Records that a query reached this root's resident; the expiry sweep reads its modification time. */
+export function markUsed(paths: ServerPaths): void {
+  writeFileSync(path.join(paths.state, 'used'), '', { mode: 0o600 });
+}
+
+export function cacheExpiryMs(): number {
+  const configured = process.env.TSYM_CACHE_EXPIRY_DAYS;
+  return (configured !== undefined && /^[1-9]\d*$/.test(configured) ? Number(configured) : 7) * 86_400_000;
+}
+
+/** Removes sibling caches whose root has not been queried within the expiry and whose resident is not running. Returns the removed directories. */
+export function sweepExpiredCaches(own: ServerPaths, now = Date.now()): string[] {
+  const base = path.dirname(own.state);
+  const removed: string[] = [];
+  for (const entry of readdirSync(base, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const directory = path.join(base, entry.name);
+    if (directory === own.state) continue;
+    try {
+      const pid = readState({ pid: path.join(directory, 'pid') } as ServerPaths)?.pid;
+      if (pid !== undefined && processAlive(pid)) continue;
+      const stamps = ['used', 'pid', 'log', 'store/meta.json'].flatMap((name) => { try { return [statSync(path.join(directory, name)).mtimeMs]; } catch { return []; } });
+      const last = stamps.length > 0 ? Math.max(...stamps) : statSync(directory).mtimeMs;
+      if (now - last < cacheExpiryMs()) continue;
+      rmSync(directory, { recursive: true, force: true });
+      removed.push(directory);
+    } catch {}
+  }
+  return removed;
+}
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error: unknown) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 
 export function removeEndpoint(paths: ServerPaths): void {
