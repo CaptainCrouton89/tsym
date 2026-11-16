@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, realpathSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { chmod, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import { applyRenamePlan, type RenameFileOperations, type RenamePlan } from '../src/commands/rename-apply.js';
 
-const scratch = path.join(process.env.HOME!, '.crouter', 'canvas', 'scratch');
+const scratch = realpathSync(tmpdir());
 
 function copiedFixture(): { root: string; cache: string; close: () => void } {
   const root = mkdtempSync(path.join(scratch, 'tsym-rename-fixture-'));
