@@ -107,6 +107,31 @@ test('a full refresh with an unchanged graph skips the store write and updates m
   }
 });
 
+test('an incremental refresh rebuilds the whole store once it passes TSYM_MAX_STORE_BYTES', () => {
+  const { root, write, cleanup } = fixture();
+  const program = new Ts7Host(root);
+  const projects = new ConfiguredProjects(root, program);
+  const store = new Store(path.join(root, 'store'));
+  const previousCap = process.env.TSYM_MAX_STORE_BYTES;
+  try {
+    projects.load();
+    const initial = buildIndex(root, program, projects, store);
+    write('src/leaf.ts', 'export function leaf(): number { return 1; }\nexport const added = leaf();\n');
+    const under = refreshIndex(root, program, projects, store, initial, { fileChanges: { changed: [path.join(root, 'src', 'leaf.ts')] } });
+    assert.equal(under.stored, 'files', 'under the default 2 GB cap an incremental refresh writes only the changed files');
+    process.env.TSYM_MAX_STORE_BYTES = '1';
+    write('src/leaf.ts', 'export function leaf(): number { return 1; }\nexport const added = leaf();\nexport const again = added;\n');
+    const over = refreshIndex(root, program, projects, store, under.built, { fileChanges: { changed: [path.join(root, 'src', 'leaf.ts')] } });
+    assert.equal(over.stored, 'full');
+    assert.ok(readGraph(store).declarations.some((declaration) => declaration.name === 'again'));
+  } finally {
+    if (previousCap === undefined) delete process.env.TSYM_MAX_STORE_BYTES; else process.env.TSYM_MAX_STORE_BYTES = previousCap;
+    store.close();
+    program.close();
+    cleanup();
+  }
+});
+
 test('a full refresh rewrites the store when one file changes', () => {
   const { root, write, cleanup } = fixture();
   const program = new Ts7Host(root);
