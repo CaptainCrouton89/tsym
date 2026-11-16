@@ -394,7 +394,7 @@ function endpointRemoved(port: string, timeout = 5_000): Promise<void> {
     const check = () => {
       if (!existsSync(port)) resolve();
       else if (Date.now() > deadline) reject(new Error('resident did not remove its endpoint'));
-      else setTimeout(check, 50).unref();
+      else setTimeout(check, 50);
     };
     check();
   });
