@@ -26,6 +26,7 @@
     "build": "rm -rf dist && node node_modules/ts5/bin/tsc",
     "prepack": "npm run build",
     "typecheck": "node node_modules/ts5/bin/tsc --noEmit",
+    "pretest": "npm run build",
     "test": "node --test --import tsx test/*.test.ts",
     "dev": "tsx src/cli.ts",
     "validate:crouter": "tsx scripts/validate-crouter.ts",

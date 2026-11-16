@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-const scratch = path.join(process.env.HOME!, '.crouter', 'canvas', 'scratch');
+const scratch = realpathSync(tmpdir());
 
 function fixture(): { root: string; cache: string; outside: string; close: () => void } {
   const root = mkdtempSync(path.join(scratch, 'tsym-preflight-'));

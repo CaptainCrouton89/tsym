@@ -233,7 +233,7 @@ test('a branch switch refreshes files instead of cold-building and ignores commi
 test('starting a fourth resident evicts the least recently queried resident', () => {
   const temporary = mkdtempSync(path.join(tmpdir(), 'tsym-resident-cap-'));
   const roots = ['first', 'second', 'third', 'fourth'].map((name) => path.join(temporary, name));
-  const scratch = path.join(process.env.HOME ?? tmpdir(), '.crouter', 'canvas', 'scratch');
+  const scratch = realpathSync(tmpdir());
   mkdirSync(scratch, { recursive: true });
   const cache = mkdtempSync(path.join(scratch, 'tsym-resident-cap-'));
   try {
@@ -259,7 +259,7 @@ test('a cap eviction lets the active request complete before stopping its reside
   const temporary = mkdtempSync(path.join(tmpdir(), 'tsym-resident-busy-'));
   const source = path.join(temporary, 'source');
   const destination = path.join(temporary, 'destination');
-  const scratch = path.join(process.env.HOME ?? tmpdir(), '.crouter', 'canvas', 'scratch');
+  const scratch = realpathSync(tmpdir());
   mkdirSync(scratch, { recursive: true });
   const cache = mkdtempSync(path.join(scratch, 'tsym-resident-busy-cache-'));
   let resident: ReturnType<typeof spawn> | undefined;
@@ -394,7 +394,7 @@ function endpointRemoved(port: string, timeout = 5_000): Promise<void> {
     const check = () => {
       if (!existsSync(port)) resolve();
       else if (Date.now() > deadline) reject(new Error('resident did not remove its endpoint'));
-      else setTimeout(check, 50).unref();
+      else setTimeout(check, 50);
     };
     check();
   });
