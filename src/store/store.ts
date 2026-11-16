@@ -1,5 +1,5 @@
 import type { Connection, Database, LbugValue, QueryResult } from '@ladybugdb/core';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { NODE_TABLES, RELATION_TABLES, SCHEMA_STATEMENTS } from './schema.js';
@@ -99,22 +99,64 @@ export class Store {
     this.ownerPath = path.join(this.path, '.tsym-owner');
     mkdirSync(this.path, { recursive: true, mode: 0o700 });
     acquireOwnership(this.path, this.ownerPath);
-    try {
-      const { Database, Connection } = loadEngine();
-      this.database = new Database(path.join(this.path, 'graph.lbug'));
-      this.database.initSync();
-      this.connection = new Connection(this.database);
-      this.connection.initSync();
-      const tables = new Set(this.execute('CALL SHOW_TABLES() RETURN *').map((row) => row.name));
-      const expected = [...NODE_TABLES, ...RELATION_TABLES].map(tableName);
-      if (tables.size === 0) this.transaction(() => { for (const statement of SCHEMA_STATEMENTS) this.execute(statement); });
-      else if (!expected.every((name) => tables.has(name))) throw new Error(`Store schema is incomplete at ${this.path}.`);
-    } catch (error) {
-      try { this.connection?.closeSync(); } catch {}
-      try { this.database?.closeSync(); } catch {}
+    try { this.openEngine(); }
+    catch (error) {
+      this.closeEngine();
       releaseOwnership(this.path, this.ownerPath);
       throw error;
     }
+  }
+
+  private openEngine(): void {
+    const { Database, Connection } = loadEngine();
+    this.database = new Database(path.join(this.path, 'graph.lbug'));
+    this.database.initSync();
+    this.connection = new Connection(this.database);
+    this.connection.initSync();
+    const tables = new Set(this.execute('CALL SHOW_TABLES() RETURN *').map((row) => row.name));
+    const expected = [...NODE_TABLES, ...RELATION_TABLES].map(tableName);
+    if (tables.size === 0) this.transaction(() => { for (const statement of SCHEMA_STATEMENTS) this.execute(statement); });
+    else if (!expected.every((name) => tables.has(name))) throw new Error(`Store schema is incomplete at ${this.path}.`);
+  }
+
+  private closeEngine(): void {
+    try { this.boundedConnection?.closeSync(); } catch {}
+    try { this.connection?.closeSync(); } catch {}
+    try { this.database?.closeSync(); } catch {}
+    this.boundedConnection = undefined; this.connection = undefined; this.database = undefined;
+  }
+
+  /** Size in bytes of the graph file plus its write-ahead log. */
+  sizeBytes(): number {
+    let total = 0;
+    for (const name of ['graph.lbug', 'graph.lbug.wal']) { try { total += statSync(path.join(this.path, name)).size; } catch {} }
+    return total;
+  }
+
+  /**
+   * Replaces the whole graph by loading it into a fresh database file and swapping that file in.
+   * LadybugDB never returns pages freed by DELETE to the file system, so clearing and re-copying in place grows the file on every full reload.
+   * If `work` throws, the current graph is untouched.
+   */
+  rebuild<T>(work: (fresh: Store) => T): T {
+    this.assertOpen();
+    if (this.writing) throw new Error('Store transaction is already in progress.');
+    const nextPath = `${this.path}.next`;
+    rmSync(nextPath, { recursive: true, force: true });
+    const fresh = new Store(nextPath);
+    let value: T;
+    try { value = work(fresh); fresh.checkpoint(); }
+    catch (error) { fresh.close(); rmSync(nextPath, { recursive: true, force: true }); throw error; }
+    fresh.close();
+    this.closeEngine();
+    try {
+      for (const name of ['graph.lbug', 'graph.lbug.wal', 'graph.lbug.shadow']) rmSync(path.join(this.path, name), { force: true });
+      renameSync(path.join(nextPath, 'graph.lbug'), path.join(this.path, 'graph.lbug'));
+    } finally {
+      rmSync(nextPath, { recursive: true, force: true });
+      this.openEngine();
+    }
+    return value;
   }
 
   execute(statement: string, parameters?: Record<string, LbugValue>): StoreRow[] {

@@ -31,7 +31,7 @@ export function refreshIndex(root: string, program: Ts7Host, projects: Configure
   const graph = storeGraph(candidate);
   const changedFiles = differingFiles(previous, candidate);
   let stored: RefreshResult['stored'] = 'none';
-  if (options.full && changedFiles.length > 0) {
+  if (changedFiles.length > 0 && (options.full || store.sizeBytes() > maxStoreBytes())) {
     loadGraph(store, graph);
     stored = 'full';
   } else if (changedFiles.length > 0) {
@@ -49,6 +49,12 @@ export function refreshIndex(root: string, program: Ts7Host, projects: Configure
   }
 
   return { built: built(candidate, graph, durationMs), changedFiles, stored, validation };
+}
+
+/** A store file past this size is rebuilt from the in-memory graph; incremental writes reuse freed pages but a bound keeps any leak finite. */
+export function maxStoreBytes(): number {
+  const configured = process.env.TSYM_MAX_STORE_BYTES;
+  return configured !== undefined && /^[1-9]\d*$/.test(configured) ? Number(configured) : 2 * 1024 ** 3;
 }
 
 export function graphsEqual(left: HeritageGraph, right: HeritageGraph): boolean {

@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createServer, type Socket } from 'node:net';
 import { appendFileSync, chmodSync, existsSync, openSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { discoverRoot, ensureStateDirectory, idleSeconds, maxResidents, pathsForRoot, publishState, removeEndpoint, type ServerPaths } from './lifecycle.js';
+import { discoverRoot, ensureStateDirectory, idleSeconds, markUsed, maxResidents, pathsForRoot, publishState, removeEndpoint, sweepExpiredCaches, type ServerPaths } from './lifecycle.js';
 import { NdjsonReader, WIRE_VERSION, type WireFrame, type WireRequest, writeFrame } from './wire.js';
 import { createSemanticContext } from './context.js';
 import { bundledTypeScriptVersion, Ts7ServerDiedError, TypeScriptBinaryError } from '../ts7/api.js';
@@ -590,6 +590,7 @@ async function main(): Promise<void> {
       return;
     }
     touch();
+    markUsed(paths);
     invokeSockets.set(socket, request.requestId);
     const queued: Queued = { request: request as WireRequest, socket, remainingQueueMs: 30_000 };
     sendPhase(socket, queued.request.requestId, 'accepted', 30_000);
@@ -605,6 +606,7 @@ async function main(): Promise<void> {
   server.listen(paths.port, () => {
     chmodSync(paths.port, 0o600);
     publishState(paths, publishedState());
+    for (const removed of sweepExpiredCaches(paths)) append(paths, `removed expired cache ${removed}`);
     append(paths, `ready pid=${process.pid} root=${root}`);
     touch();
   });

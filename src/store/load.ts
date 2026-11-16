@@ -65,12 +65,10 @@ const commitColumns = ['hash', 'ts', 'author', 'subject'] as const;
 
 export function loadGraph(store: Store, graph: StoreGraph): LoadReceipt {
   validateGraph(graph);
-  return store.transaction(() => {
-    const loaded = withCheckpointHistory(graph, checkpointHistory(store));
-    clearGraph(store);
-    copyGraph(store, loaded);
-    return receiptFor(loaded);
-  });
+  const loaded = withCheckpointHistory(graph, checkpointHistory(store));
+  // The file is rebuilt, not cleared and re-copied: deleted pages are never returned to the file system.
+  store.rebuild((fresh) => fresh.transaction(() => copyGraph(fresh, loaded)));
+  return receiptFor(loaded);
 }
 
 /** Rehydrates the persisted graph when an unchanged workspace reuses its store across a resident restart. */
@@ -106,12 +104,6 @@ export function replaceFiles(store: Store, files: readonly string[], graph: Stor
 /** One-file compatibility call of the unified replacement transaction. */
 export function replaceFile(store: Store, file: string, graph: StoreGraph): LoadReceipt {
   return replaceFiles(store, [file], graph);
-}
-
-function clearGraph(store: Store): void {
-  store.execute('MATCH (d:Declaration) DETACH DELETE d');
-  store.execute('MATCH (e:External) DETACH DELETE e');
-  store.execute('MATCH (c:Commit) DETACH DELETE c');
 }
 
 function copyGraph(store: Store, graph: StoreGraph): void {
