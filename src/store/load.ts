@@ -162,7 +162,7 @@ function copyRows(store: Store, table: string, columns: readonly string[], rows:
   try {
     writeFileSync(csvPath, csv(columns, rows), { mode: 0o600 });
     const pair = target === undefined ? '' : `, from='Declaration', to='${target}'`;
-    store.execute(`COPY ${table} FROM ${literal(csvPath)} (HEADER=true${pair})`);
+    store.execute(`COPY ${table} FROM ${literal(csvPath)} (HEADER=true, ESCAPE='"'${pair})`);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
